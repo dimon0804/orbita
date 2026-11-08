@@ -8,6 +8,10 @@
 
 Subscriptions, share links, SOCKS/HTTP proxies, TUN mode for all traffic, live stats and logs — in one clean window.
 
+[![Release](https://img.shields.io/github/v/release/dimon0804/orbita?label=download&color=7c5cff)](https://github.com/dimon0804/orbita/releases/latest)
+![Windows](https://img.shields.io/badge/Windows-10%20%7C%2011-0078d4)
+![Core](https://img.shields.io/badge/sing--box-1.14.4-22d3ee)
+
 [Русский](README.md)
 
 </div>
@@ -27,6 +31,10 @@ Subscriptions, share links, SOCKS/HTTP proxies, TUN mode for all traffic, live s
 - **One-click import from NekoBox/NekoRay.**
 - Tray menu, autostart, dark and light themes, accent colors.
 
+## Install
+
+Grab `Orbita-Setup-x.y.z.exe` or `Orbita-Portable-x.y.z.exe` from [Releases](https://github.com/dimon0804/orbita/releases/latest). The build is not code-signed yet, so SmartScreen may warn: “More info” → “Run anyway”.
+
 ## Build
 
 ```bash
@@ -44,4 +52,4 @@ npm run dist   # installer and portable exe in release/
 
 ## License
 
-MIT © dimon0804. The bundled [sing-box](https://github.com/SagerNet/sing-box) core is GPL-3.0.
+MIT © dimon0804. Bundled third-party parts: the unmodified official [sing-box](https://github.com/SagerNet/sing-box/tree/v1.14.4) v1.14.4 binary (GPL-3.0, license shipped alongside), [sing-geosite](https://github.com/SagerNet/sing-geosite)/[sing-geoip](https://github.com/SagerNet/sing-geoip) rule sets, and the [Twemoji](https://github.com/jdecked/twemoji) flag font (CC-BY 4.0) via [country-flag-emoji-polyfill](https://github.com/talkjs/country-flag-emoji-polyfill).

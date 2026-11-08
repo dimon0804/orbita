@@ -8,6 +8,11 @@
 
 Подписки, ссылки, SOCKS/HTTP-прокси, режим TUN для всего трафика, живая статистика и логи — в одном аккуратном окне.
 
+[![Релиз](https://img.shields.io/github/v/release/dimon0804/orbita?label=скачать&color=7c5cff)](https://github.com/dimon0804/orbita/releases/latest)
+![Windows](https://img.shields.io/badge/Windows-10%20%7C%2011-0078d4)
+![Ядро](https://img.shields.io/badge/sing--box-1.14.4-22d3ee)
+![Лицензия](https://img.shields.io/github/license/dimon0804/orbita)
+
 [English](README.en.md)
 
 </div>
@@ -35,7 +40,9 @@
 
 ## Установка
 
-Скачай `Orbita-Setup-x.y.z.exe` (установщик) или `Orbita-Portable-x.y.z.exe` (без установки) и запусти. При первом запуске Windows спросит права администратора — это нужно для TUN и спрашивается один раз. Отказаться можно, тогда будут доступны системный прокси и локальный порт.
+Скачай со страницы [релизов](https://github.com/dimon0804/orbita/releases/latest) `Orbita-Setup-x.y.z.exe` (установщик) или `Orbita-Portable-x.y.z.exe` (без установки) и запусти.
+
+Программа пока не подписана сертификатом, поэтому SmartScreen может предупредить о неизвестном издателе: «Подробнее» → «Выполнить в любом случае». При первом запуске Windows спросит права администратора — это нужно для TUN и спрашивается один раз. Отказаться можно, тогда будут доступны системный прокси и локальный порт.
 
 ## Сборка из исходников
 
@@ -67,6 +74,10 @@ npm run dist       # установщик и портативная версия
 - WireGuard-ссылки пока не принимаются: в sing-box 1.14 WireGuard — это endpoint, а не outbound.
 - Только Windows.
 
-## Лицензия
+## Лицензия и сторонние компоненты
 
-MIT © dimon0804. Ядро [sing-box](https://github.com/SagerNet/sing-box) распространяется под GPL-3.0, его лицензия лежит рядом с бинарником.
+Код Orbita — MIT © dimon0804.
+
+- Ядро [sing-box](https://github.com/SagerNet/sing-box) — GPL-3.0. В сборку входит неизменённый бинарник официального релиза v1.14.4, его лицензия лежит рядом (`resources/core/LICENSE`), исходный код — в [репозитории sing-box](https://github.com/SagerNet/sing-box/tree/v1.14.4).
+- Наборы правил [sing-geosite](https://github.com/SagerNet/sing-geosite) и [sing-geoip](https://github.com/SagerNet/sing-geoip).
+- Шрифт флагов — [Twemoji](https://github.com/jdecked/twemoji) (графика CC-BY 4.0) в сборке [country-flag-emoji-polyfill](https://github.com/talkjs/country-flag-emoji-polyfill).
