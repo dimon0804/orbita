@@ -3,7 +3,7 @@ import { _electron as electron } from 'playwright'
 import { rmSync } from 'fs'
 const data = process.env.ORBITA_DATA
 rmSync(data, { recursive: true, force: true })
-const app = await electron.launch({ args: ['.'], env: { ...process.env, ORBITA_DATA: data } })
+const app = await electron.launch({ args: ['.', '--no-elevate'], env: { ...process.env, ORBITA_DATA: data } })
 const win = await app.firstWindow()
 await win.setViewportSize({ width: 1180, height: 760 })
 await win.waitForSelector('.dash')

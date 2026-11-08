@@ -8,7 +8,7 @@ import { execSync, spawn } from 'child_process'
 const data = process.env.ORBITA_DATA || join(process.cwd(), '.e2e-data')
 const shots = join(process.cwd(), '.e2e-shots')
 mkdirSync(shots, { recursive: true })
-const app = await electron.launch({ args: ['.'], env: { ...process.env, ORBITA_DATA: data } })
+const app = await electron.launch({ args: ['.', '--no-elevate'], env: { ...process.env, ORBITA_DATA: data } })
 const win = await app.firstWindow()
 win.on('console', (m) => m.type() === 'error' && console.log('console error:', m.text()))
 win.on('pageerror', (e) => console.log('page error:', e.message))

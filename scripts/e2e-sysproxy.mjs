@@ -3,7 +3,7 @@ import { _electron as electron } from 'playwright'
 import { execFileSync, execSync } from 'child_process'
 const KEY = String.raw`HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings`
 const q = (v) => execFileSync('reg', ['query', KEY, '/v', v]).toString().trim().split(/\s+/).pop()
-const app = await electron.launch({ args: ['.'], env: { ...process.env } })
+const app = await electron.launch({ args: ['.', '--no-elevate'], env: { ...process.env } })
 const win = await app.firstWindow()
 await win.waitForSelector('.dash')
 const call = (ch, ...a) => win.evaluate(([ch, a]) => window.orbita.call(ch, ...a), [ch, a])

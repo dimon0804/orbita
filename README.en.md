@@ -29,6 +29,8 @@ Subscriptions, share links, SOCKS/HTTP proxies, TUN mode for all traffic, live s
 - **Servers:** groups, search, sorting, bulk latency test (works while disconnected), seamless in-group switching, share links, JSON editing.
 - **Connections** table, core **logs** with level filter and search, daily and per-server **statistics**.
 - **One-click import from NekoBox/NekoRay.**
+- **Auto best server** per group, **QR codes** for mobile clients, a **global hotkey** (`Ctrl+Alt+O`), Windows notifications, auto-reconnect.
+- **Built-in updater** that checks GitHub releases and updates in one click.
 - Tray menu, autostart, dark and light themes, accent colors.
 
 ## Install

@@ -1,6 +1,6 @@
 // Проверка обновления подписки (групп с url) на уже импортированных данных.
 import { _electron as electron } from 'playwright'
-const app = await electron.launch({ args: ['.'], env: { ...process.env } })
+const app = await electron.launch({ args: ['.', '--no-elevate'], env: { ...process.env } })
 const win = await app.firstWindow()
 await win.waitForSelector('.dash')
 const call = (ch, ...a) => win.evaluate(([ch, a]) => window.orbita.call(ch, ...a), [ch, a])

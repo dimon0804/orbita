@@ -273,7 +273,8 @@ export class Core extends EventEmitter {
 
   /** Переключение сервера внутри работающей группы — без перезапуска ядра. */
   async select(id: string): Promise<void> {
-    await this.api('/proxies/proxy', { method: 'PUT', body: JSON.stringify({ name: id }) })
+    const name = id.startsWith('auto:') ? 'auto' : id
+    await this.api('/proxies/proxy', { method: 'PUT', body: JSON.stringify({ name }) })
     this.setStatus({ ...this.status, profileId: id })
   }
 

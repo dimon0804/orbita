@@ -78,6 +78,14 @@ export interface Settings {
   closeToTray: boolean
   /** Держать права администратора (для TUN) без повторных окон UAC. */
   runAsAdmin: boolean
+  /** Проверять обновления на GitHub. */
+  checkUpdates: boolean
+  /** Глобальная горячая клавиша подключения, формат Electron Accelerator. Пусто — выключена. */
+  hotkey: string
+  /** Уведомления Windows о подключении, обрывах и обновлениях. */
+  notifications: boolean
+  /** Если ядро упало — поднять его снова. */
+  autoReconnect: boolean
   theme: 'dark' | 'light' | 'system'
   accent: string
   selectedProfileId?: string

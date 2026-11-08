@@ -8,6 +8,7 @@ import {
   act, AppState, bytes, stripFlag, call, duration, flag, latencyClass, nameFlag, protoLabel, rate, session, speed, toast, useNow, useStore
 } from '../api'
 import { Segmented } from '../components/ui'
+import { UpdateCard } from './About'
 import type { PageId } from '../App'
 
 interface IpInfo {
@@ -29,8 +30,20 @@ export default function Dashboard({ st, go }: { st: AppState; go: (p: PageId) =>
   const [ipLoading, setIpLoading] = useState(false)
 
   const selId = running ? status.profileId : s.selectedProfileId
-  const prof = st.profiles.find((p) => p.id === selId) ?? st.profiles[0]
-  const group = st.groups.find((g) => g.id === prof?.groupId)
+  const isAuto = Boolean(selId?.startsWith('auto:'))
+  const [autoNow, setAutoNow] = useState<string | null>(null)
+  useEffect(() => {
+    if (!isAuto || !running) return setAutoNow(null)
+    const tick = (): void =>
+      void call<Record<string, { now?: string }>>('core:proxies').then((p) => setAutoNow(p.auto?.now ?? null)).catch(() => {})
+    tick()
+    const i = setInterval(tick, 5000)
+    return () => clearInterval(i)
+  }, [isAuto, running])
+  const prof = isAuto
+    ? st.profiles.find((p) => p.id === autoNow)
+    : (st.profiles.find((p) => p.id === selId) ?? st.profiles[0])
+  const group = st.groups.find((g) => g.id === (isAuto ? selId!.slice(5) : prof?.groupId))
   const last = sp[sp.length - 1]
   const today = st.stats.find((x) => x.date === new Date().toISOString().slice(0, 10))
 
@@ -62,13 +75,13 @@ export default function Dashboard({ st, go }: { st: AppState; go: (p: PageId) =>
   }
 
   const modes: { value: ConnectMode; label: string; icon: React.ReactNode; hint: string; disabled?: boolean }[] = [
-    { value: 'system', label: 'Системный прокси', icon: <Laptop size={15} />, hint: 'Браузеры и большинство программ идут через прокси Windows' },
+    { value: 'system', label: 'Системный', icon: <Laptop size={15} />, hint: 'Браузеры и большинство программ идут через прокси Windows' },
     { value: 'tun', label: 'TUN', icon: <Layers size={15} />, hint: 'Виртуальный адаптер: перехватывается трафик всех программ, игр и UDP' },
-    { value: 'proxy', label: 'Локальный порт', icon: <Waypoints size={15} />, hint: `Ядро слушает 127.0.0.1:${s.mixedPort}, ничего в системе не меняется` }
+    { value: 'proxy', label: 'Порт', icon: <Waypoints size={15} />, hint: `Ядро слушает 127.0.0.1:${s.mixedPort}, ничего в системе не меняется` }
   ]
   const routes: { value: RouteMode; label: string; hint: string }[] = [
     { value: 'rule', label: 'По правилам', hint: 'Российские сайты напрямую, остальное через сервер' },
-    { value: 'global', label: 'Всё через сервер', hint: 'Весь трафик через прокси' },
+    { value: 'global', label: 'Глобально', hint: 'Весь трафик через прокси' },
     { value: 'direct', label: 'Напрямую', hint: 'Ядро работает, но всё идёт мимо прокси' }
   ]
 
@@ -76,6 +89,7 @@ export default function Dashboard({ st, go }: { st: AppState; go: (p: PageId) =>
 
   return (
     <div className="dash">
+      {st.update?.available && <div className="dash-update"><UpdateCard st={st} compact /></div>}
       <section className={`hero card ${running ? 'hero-on' : ''} ${busy ? 'hero-busy' : ''}`}>
         <div className="hero-orb-wrap">
           <button className="orb" onClick={() => void toggle()} disabled={busy} aria-label={running ? 'Отключиться' : 'Подключиться'}>
@@ -99,14 +113,18 @@ export default function Dashboard({ st, go }: { st: AppState; go: (p: PageId) =>
           )}
 
           <button className="server-pick" onClick={() => go('servers')}>
-            <span className="server-flag">{(prof && nameFlag(prof.name)) ?? '🛰️'}</span>
+            <span className="server-flag">{isAuto && !prof ? <Zap size={20} /> : ((prof && nameFlag(prof.name)) ?? '🛰️')}</span>
             <span className="server-text">
-              <span className="server-name">{prof ? stripFlag(prof.name) : 'Сервер не выбран'}</span>
+              <span className="server-name">
+                {isAuto ? `Авто · ${group?.name ?? ''}` : prof ? stripFlag(prof.name) : 'Сервер не выбран'}
+              </span>
               <span className="server-meta">
-                {prof ? (
+                {isAuto && !prof ? (
+                  'Лучший сервер группы по задержке, переключается сам'
+                ) : prof ? (
                   <>
                     <span className="proto">{protoLabel(prof.outbound)}</span>
-                    {group?.name}
+                    {isAuto ? stripFlag(prof.name) : group?.name}
                     {prof.latency !== undefined && (
                       <span className={`lat ${latencyClass(prof.latency)}`}>{prof.latency === null ? 'нет ответа' : `${prof.latency} мс`}</span>
                     )}

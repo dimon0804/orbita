@@ -27,6 +27,17 @@ export interface AppState {
   status: CoreStatus
   isAdmin: boolean
   version: string
+  portable: boolean
+  update: null | {
+    current: string
+    latest: string
+    available: boolean
+    notes: string
+    url: string
+    stage: 'idle' | 'downloading' | 'ready' | 'error'
+    progress?: number
+    error?: string
+  }
 }
 
 // ───── простое хранилище на подписках ─────
@@ -112,6 +123,10 @@ export function startBridge(): void {
     const next = arr.length > 3000 ? arr.slice(-2500) : arr.slice()
     next.push(l as LogLine)
     logs.set(next)
+  })
+  on('update:progress', (p) => {
+    const st = appState.get()
+    if (st?.update) appState.set({ ...st, update: { ...st.update, progress: p as number } })
   })
   on('toast', (t) => {
     const x = t as { kind: Toast['kind']; text: string }

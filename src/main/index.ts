@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, ipcMain, Menu, nativeImage, session, shell, Tray } from 'electron'
+import { app, BrowserWindow, clipboard, globalShortcut, ipcMain, Menu, nativeImage, Notification, session, shell, Tray } from 'electron'
 import { execFileSync } from 'child_process'
 import { existsSync } from 'fs'
 import { homedir } from 'os'
@@ -11,6 +11,7 @@ import { sys, enableElevatedTask, ensureElevated, isAdmin, relaunchAsAdmin, remo
 import { iconPath } from './paths'
 import { clearSystemProxy } from './sysproxy'
 import { importNekobox } from './nekobox'
+import { checkForUpdate, currentVersion, downloadUpdate, isPortable, runInstaller, UpdateInfo } from './updater'
 
 const core = new Core()
 let win: BrowserWindow | null = null
@@ -141,7 +142,9 @@ function publicState(): unknown {
     stats: d.stats,
     status: core.status,
     isAdmin: isAdmin(),
-    version: app.getVersion()
+    version: currentVersion(),
+    portable: isPortable(),
+    update
   }
 }
 
@@ -165,6 +168,8 @@ async function patchSettings(patch: Partial<Settings>): Promise<void> {
       }
     } else removeElevatedTask()
   }
+  if ('hotkey' in patch) registerHotkey()
+  if (patch.checkUpdates) void checkUpdates().catch(() => {})
   if ('launchOnStartup' in patch || 'startMinimized' in patch)
     setAutostart(d.settings.launchOnStartup, d.settings.startMinimized)
   broadcast()
@@ -189,8 +194,22 @@ async function setMode(m: ConnectMode): Promise<void> {
   if (was) await connect().catch((e) => send('toast', { kind: 'error', text: errText(e) }))
 }
 
+/** Группа выбранного: обычный профиль или «auto:<groupId>» — автовыбор лучшего в группе. */
+function groupOf(id?: string): string | undefined {
+  if (!id) return undefined
+  if (id.startsWith('auto:')) return id.slice(5)
+  return db().profiles.find((p) => p.id === id)?.groupId
+}
+
+function selectionValid(id?: string): boolean {
+  if (!id) return false
+  if (id.startsWith('auto:')) return db().profiles.some((p) => p.groupId === id.slice(5))
+  return db().profiles.some((p) => p.id === id)
+}
+
 function groupProfiles(selectedId: string): Profile[] {
   const d = db()
+  if (selectedId.startsWith('auto:')) return d.profiles.filter((p) => p.groupId === selectedId.slice(5))
   const sel = d.profiles.find((p) => p.id === selectedId)
   if (!sel) return []
   return d.profiles.filter((p) => p.groupId === sel.groupId)
@@ -203,7 +222,7 @@ function connect(): Promise<void> {
 async function doConnect(): Promise<void> {
   const d = db()
   let selected = d.settings.selectedProfileId
-  if (!selected || !d.profiles.some((p) => p.id === selected)) selected = d.profiles[0]?.id
+  if (!selectionValid(selected)) selected = d.profiles[0]?.id
   if (!selected) throw new Error('Добавь хотя бы один сервер')
   d.settings.selectedProfileId = selected
   try {
@@ -215,7 +234,9 @@ async function doConnect(): Promise<void> {
       isAdmin: isAdmin()
     })
     d.dirty = d.settings.connectMode === 'system'
+    wantConnected = true
     save()
+    notify('Подключено', `${profileName(selected!)} · ${MODE_NAME[d.settings.connectMode]}`)
   } finally {
     await updateNetProxy().catch(() => {})
     broadcast()
@@ -227,6 +248,7 @@ function disconnect(): Promise<void> {
 }
 
 async function doDisconnect(): Promise<void> {
+  wantConnected = false
   await core.stop()
   db().dirty = false
   save()
@@ -246,16 +268,117 @@ async function toggle(): Promise<void> {
 
 async function selectProfile(id: string): Promise<void> {
   const d = db()
-  const prev = d.profiles.find((p) => p.id === core.status.profileId)
-  const next = d.profiles.find((p) => p.id === id)
-  if (!next) return
+  if (!selectionValid(id)) return
+  const prevGroup = groupOf(core.status.profileId)
   d.settings.selectedProfileId = id
   save()
-  if (core.running) {
-    if (prev && prev.groupId === next.groupId) await serial(() => core.select(id)).catch(() => connect())
-    else if (prev?.id !== id) await connect()
+  if (core.running && core.status.profileId !== id) {
+    if (prevGroup && prevGroup === groupOf(id)) await serial(() => core.select(id)).catch(() => connect())
+    else await connect()
   }
   broadcast()
+}
+
+const MODE_NAME: Record<ConnectMode, string> = { system: 'системный прокси', tun: 'TUN', proxy: 'локальный порт' }
+
+function profileName(id: string): string {
+  if (id.startsWith('auto:')) return `Авто · ${db().groups.find((g) => g.id === id.slice(5))?.name ?? ''}`
+  return db().profiles.find((p) => p.id === id)?.name ?? 'сервер'
+}
+
+/** Уведомление Windows — только когда окно не перед глазами. */
+function notify(title: string, body: string, force = false): void {
+  if (!db().settings.notifications || !Notification.isSupported()) return
+  if (!force && win?.isVisible() && win.isFocused()) return
+  const n = new Notification({ title, body, icon: iconPath('icon.png'), silent: true })
+  n.on('click', showWindow)
+  n.show()
+}
+
+// ───────── автопереподключение ─────────
+
+let wantConnected = false
+let crashes: number[] = []
+function onCoreCrash(): void {
+  notify('Ядро остановилось', core.status.error ?? 'Неизвестная ошибка', true)
+  if (!wantConnected || !db().settings.autoReconnect) return
+  crashes = crashes.filter((t) => Date.now() - t < 60_000)
+  if (crashes.length >= 3) {
+    notify('Не получается переподключиться', 'Ядро падает снова и снова. Загляни в логи.', true)
+    wantConnected = false
+    return
+  }
+  crashes.push(Date.now())
+  setTimeout(() => {
+    if (wantConnected && !core.running) void connect().catch(() => {})
+  }, 2000)
+}
+
+// ───────── горячая клавиша ─────────
+
+function registerHotkey(): void {
+  globalShortcut.unregisterAll()
+  const k = db().settings.hotkey.trim()
+  if (!k) return
+  try {
+    if (!globalShortcut.register(k, () => void toggle())) send('toast', { kind: 'warn', text: `Сочетание ${k} занято другой программой` })
+  } catch {
+    send('toast', { kind: 'warn', text: `Не понимаю сочетание «${k}»` })
+  }
+}
+
+// ───────── обновления ─────────
+
+type UpdateState = UpdateInfo & {
+  stage: 'idle' | 'downloading' | 'ready' | 'error'
+  progress?: number
+  file?: string
+  error?: string
+}
+let update: UpdateState | null = null
+
+async function checkUpdates(manual = false): Promise<UpdateInfo | null> {
+  if (!manual && !db().settings.checkUpdates) return null
+  const info = await checkForUpdate((u, i) => netSession().fetch(u, i))
+  const same = update?.latest === info.latest
+  const wasKnown = same && update!.available
+  update = same ? { ...update!, ...info } : { ...info, stage: 'idle' }
+  if (info.available && !wasKnown) notify(`Вышла Orbita ${info.latest}`, 'Открой приложение, чтобы обновиться.', true)
+  broadcast()
+  return info
+}
+
+async function startDownload(): Promise<void> {
+  const u = update
+  if (!u?.available) throw new Error('Обновлений нет')
+  if (isPortable() || !u.setupUrl) {
+    await shell.openExternal(u.url)
+    return
+  }
+  u.stage = 'downloading'
+  u.progress = 0
+  u.error = undefined
+  broadcast()
+  try {
+    u.file = await downloadUpdate(u, (url, i) => netSession().fetch(url, i), (p) => {
+      u.progress = p
+      send('update:progress', p)
+    })
+    u.stage = 'ready'
+  } catch (e) {
+    u.stage = 'error'
+    u.error = errText(e)
+    throw e
+  } finally {
+    broadcast()
+  }
+}
+
+function installUpdate(): void {
+  if (update?.stage !== 'ready' || !update.file) throw new Error('Обновление ещё не скачано')
+  runInstaller(update.file)
+  quitting = true
+  app.quit()
 }
 
 const errText = (e: unknown): string => (e instanceof Error ? e.message : String(e))
@@ -518,6 +641,14 @@ function ipc(): void {
     broadcast()
     return { groups: res.groups.length, profiles: n }
   })
+  h('update:check', () => checkUpdates(true))
+  h('update:download', () => startDownload())
+  h('update:install', () => installUpdate())
+  h('open:url', (url: string) => {
+    if (!/^https:\/\/(github\.com|t\.me)\//.test(url)) throw new Error('Ссылка не разрешена')
+    return shell.openExternal(url)
+  })
+  h('core:proxies', async () => (core.running ? core.proxies() : {}))
   h('admin:relaunch', async () => {
     await disconnect()
     save(true)
@@ -533,6 +664,7 @@ function ipc(): void {
 // ───────── старт ─────────
 
 app.on('second-instance', showWindow)
+app.on('will-quit', () => globalShortcut.unregisterAll())
 
 app.whenReady().then(async () => {
   const d = db()
@@ -554,8 +686,9 @@ app.whenReady().then(async () => {
   }
   ipc()
 
-  core.on('status', (st: { state: string }) => {
+  core.on('status', (st: { state: string; error?: string }) => {
     if (st.state !== 'running') void updateNetProxy().catch(() => {})
+    if (st.state === 'error' && st.error?.startsWith('Ядро неожиданно')) onCoreCrash()
     broadcast()
   })
   core.on('pid', (pid?: number) => {
@@ -582,6 +715,10 @@ app.whenReady().then(async () => {
   const hidden = process.argv.includes('--hidden') || d.settings.startMinimized
   createWindow(!hidden)
   scheduleSubscriptions()
+  registerHotkey()
+  // Обновления: через 10 секунд после старта и дальше раз в 6 часов.
+  setTimeout(() => void checkUpdates().catch(() => {}), 10_000)
+  setInterval(() => void checkUpdates().catch(() => {}), 6 * 3600_000)
 
   if (d.settings.connectOnLaunch && d.profiles.length) void connect().catch(() => {})
 })

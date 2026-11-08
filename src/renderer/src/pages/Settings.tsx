@@ -1,4 +1,3 @@
-import { useEffect, useState } from 'react'
 import { FolderOpen, ShieldAlert, ShieldCheck } from 'lucide-react'
 import type { Settings } from '@shared/types'
 import { act, AppState, call } from '../api'
@@ -9,8 +8,6 @@ const ACCENTS = ['#7c5cff', '#3b82f6', '#06b6d4', '#10b981', '#f59e0b', '#f43f5e
 export default function SettingsPage({ st }: { st: AppState }): React.JSX.Element {
   const s = st.settings
   const set = (p: Partial<Settings>): void => void act(call('settings', p))
-  const [core, setCore] = useState('…')
-  useEffect(() => void call<string>('core:version').then(setCore), [])
 
   return (
     <div className="settings">
@@ -38,6 +35,16 @@ export default function SettingsPage({ st }: { st: AppState }): React.JSX.Elemen
         <Row title="Запускать свёрнутой в трей"><Toggle checked={s.startMinimized} onChange={(v) => set({ startMinimized: v })} /></Row>
         <Row title="Подключаться при запуске" hint="К последнему выбранному серверу в последнем режиме"><Toggle checked={s.connectOnLaunch} onChange={(v) => set({ connectOnLaunch: v })} /></Row>
         <Row title="Крестик сворачивает в трей"><Toggle checked={s.closeToTray} onChange={(v) => set({ closeToTray: v })} /></Row>
+      </section>
+
+      <section className="card">
+        <div className="card-label">Удобство</div>
+        <Row title="Горячая клавиша подключения" hint="Работает из любой программы. Например CommandOrControl+Alt+O или Alt+Shift+V. Пусто — выключить.">
+          <TextInput value={s.hotkey} onChange={(v) => set({ hotkey: v.trim() })} placeholder="CommandOrControl+Alt+O" />
+        </Row>
+        <Row title="Переподключаться, если ядро упало" hint="До трёх попыток в минуту, дальше Orbita сдаётся и показывает уведомление"><Toggle checked={s.autoReconnect} onChange={(v) => set({ autoReconnect: v })} /></Row>
+        <Row title="Уведомления Windows" hint="Подключение, обрыв, новая версия — когда окно свёрнуто"><Toggle checked={s.notifications} onChange={(v) => set({ notifications: v })} /></Row>
+        <Row title="Проверять обновления" hint="При запуске и раз в 6 часов смотрит релизы на GitHub"><Toggle checked={s.checkUpdates} onChange={(v) => set({ checkUpdates: v })} /></Row>
       </section>
 
       <section className="card">
@@ -75,17 +82,14 @@ export default function SettingsPage({ st }: { st: AppState }): React.JSX.Elemen
         <Row title="DNS через сервер" hint="https://, tls://, udp:// или просто IP"><TextInput value={s.dnsRemote} onChange={(v) => set({ dnsRemote: v })} wide /></Row>
         <Row title="DNS напрямую" hint="Для российских сайтов и адресов самих серверов"><TextInput value={s.dnsDirect} onChange={(v) => set({ dnsDirect: v })} wide /></Row>
         <Row title="Адрес для замера задержки"><TextInput value={s.testUrl} onChange={(v) => set({ testUrl: v })} wide /></Row>
+        <Row title="Папка с данными" hint="Серверы, настройки, кэш ядра">
+          <button className="btn" onClick={() => void call('open:data')}><FolderOpen size={15} /> Открыть</button>
+        </Row>
         <Row title="Подробность логов">
           <Segmented value={s.logLevel} onChange={(v) => set({ logLevel: v })} options={[{ value: 'debug', label: 'debug' }, { value: 'info', label: 'info' }, { value: 'warn', label: 'warn' }, { value: 'error', label: 'error' }]} />
         </Row>
       </section>
 
-      <section className="card">
-        <div className="card-label">О программе</div>
-        <Row title={`Orbita ${st.version}`} hint={`Ядро sing-box ${core}`}>
-          <button className="btn" onClick={() => void call('open:data')}><FolderOpen size={15} /> Папка с данными</button>
-        </Row>
-      </section>
     </div>
   )
 }

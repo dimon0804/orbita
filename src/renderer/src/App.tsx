@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import {
-  Activity, BarChart3, Gauge, Minus, Network, ScrollText, Server, Settings2, Shield, Square, X, Copy as Restore
+  Activity, BarChart3, Gauge, Info, Minus, Network, ScrollText, Server, Settings2, Shield, Square, X, Copy as Restore
 } from 'lucide-react'
 import { appState, call, on, startBridge, toasts, useStore } from './api'
 import Dashboard from './pages/Dashboard'
@@ -10,6 +10,7 @@ import Logs from './pages/Logs'
 import Stats from './pages/Stats'
 import Rules from './pages/Rules'
 import SettingsPage from './pages/Settings'
+import About from './pages/About'
 import { Logo } from './components/Logo'
 
 const PAGES = [
@@ -19,7 +20,8 @@ const PAGES = [
   { id: 'rules', label: 'Маршруты', icon: Shield },
   { id: 'stats', label: 'Статистика', icon: BarChart3 },
   { id: 'logs', label: 'Логи', icon: ScrollText },
-  { id: 'settings', label: 'Настройки', icon: Settings2 }
+  { id: 'settings', label: 'Настройки', icon: Settings2 },
+  { id: 'about', label: 'О программе', icon: Info }
 ] as const
 export type PageId = (typeof PAGES)[number]['id']
 
@@ -70,6 +72,7 @@ export default function App(): React.JSX.Element {
           <button key={p.id} className={`nav ${page === p.id ? 'active' : ''}`} onClick={() => setPage(p.id)}>
             <p.icon size={18} strokeWidth={1.8} />
             <span>{p.label}</span>
+            {p.id === 'about' && st?.update?.available && <span className="nav-dot" title="Есть обновление" />}
           </button>
         ))}
         <div className="sidebar-foot">
@@ -91,6 +94,7 @@ export default function App(): React.JSX.Element {
             {page === 'stats' && <Stats st={st} />}
             {page === 'logs' && <Logs />}
             {page === 'settings' && <SettingsPage st={st} />}
+            {page === 'about' && <About st={st} />}
           </div>
         )}
       </main>

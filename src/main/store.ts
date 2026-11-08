@@ -45,6 +45,10 @@ export const DEFAULT_SETTINGS: Settings = {
   connectOnLaunch: false,
   closeToTray: true,
   runAsAdmin: true,
+  checkUpdates: true,
+  hotkey: 'CommandOrControl+Alt+O',
+  notifications: true,
+  autoReconnect: true,
   theme: 'dark',
   accent: '#7c5cff'
 }

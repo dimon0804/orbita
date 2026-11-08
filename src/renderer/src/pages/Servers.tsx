@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
-  ArrowDownUp, Check, ClipboardPaste, Download, FolderPlus, Gauge, Link2, Pencil, Plus, RefreshCw, Rss, Search, Server, Share2, Trash2
+  ArrowDownUp, Check, ClipboardPaste, Download, FolderPlus, Gauge, Link2, Pencil, Plus, QrCode, RefreshCw, Rss, Search, Server, Share2, Trash2, Zap
 } from 'lucide-react'
 import type { Group, Profile } from '@shared/types'
 import { act, AppState, bytes, call, latencyClass, nameFlag, protoLabel, toast } from '../api'
+import QRCode from 'qrcode'
 import { Empty, Modal } from '../components/ui'
 
 type Sort = 'order' | 'latency' | 'name'
@@ -18,7 +19,7 @@ export default function Servers({ st }: { st: AppState }): React.JSX.Element {
   const [sort, setSort] = useState<Sort>('order')
   const [testing, setTesting] = useState(false)
   const [refreshing, setRefreshing] = useState<string | null>(null)
-  const [dialog, setDialog] = useState<null | 'add' | 'neko' | 'group' | { edit: Profile } | { editGroup: Group }>(null)
+  const [dialog, setDialog] = useState<null | 'add' | 'neko' | 'group' | { edit: Profile } | { editGroup: Group } | { qr: Profile }>(null)
 
   const group = st.groups.find((g) => g.id === groupId) ?? st.groups[0]
   const counts = useMemo(() => {
@@ -148,6 +149,16 @@ export default function Servers({ st }: { st: AppState }): React.JSX.Element {
           </Empty>
         ) : (
           <div className="plist">
+            {!q && list.length > 1 && group && (
+              <AutoRow
+                group={group}
+                count={list.length}
+                selected={selId === `auto:${group.id}`}
+                running={st.status.state === 'running' && st.status.profileId === `auto:${group.id}`}
+                onSelect={() => void act(call('select', `auto:${group.id}`))}
+                onConnect={() => void act(call('select', `auto:${group.id}`).then(() => st.status.state !== 'running' && call('connect')))}
+              />
+            )}
             {list.map((p) => (
               <ProfileRow
                 key={p.id}
@@ -157,6 +168,7 @@ export default function Servers({ st }: { st: AppState }): React.JSX.Element {
                 onSelect={() => void act(call('select', p.id))}
                 onConnect={() => void act(call('select', p.id).then(() => st.status.state !== 'running' && call('connect')))}
                 onEdit={() => setDialog({ edit: p })}
+                onQr={() => setDialog({ qr: p })}
               />
             ))}
           </div>
@@ -166,6 +178,7 @@ export default function Servers({ st }: { st: AppState }): React.JSX.Element {
       {dialog === 'add' && <AddDialog groupId={group?.kind === 'manual' ? group.id : undefined} onClose={() => setDialog(null)} onGroup={setGroupId} />}
       {dialog === 'neko' && <NekoDialog onClose={() => setDialog(null)} />}
       {dialog === 'group' && <GroupDialog onClose={() => setDialog(null)} onCreated={setGroupId} />}
+      {dialog && typeof dialog === 'object' && 'qr' in dialog && <QrDialog p={dialog.qr} onClose={() => setDialog(null)} />}
       {dialog && typeof dialog === 'object' && 'edit' in dialog && <EditDialog p={dialog.edit} onClose={() => setDialog(null)} />}
       {dialog && typeof dialog === 'object' && 'editGroup' in dialog && (
         <GroupEditDialog g={dialog.editGroup} onClose={() => setDialog(null)} onDeleted={() => setGroupId(st.groups[0]?.id)} />
@@ -174,8 +187,48 @@ export default function Servers({ st }: { st: AppState }): React.JSX.Element {
   )
 }
 
-function ProfileRow({ p, selected, running, onSelect, onConnect, onEdit }: {
-  p: Profile; selected: boolean; running: boolean; onSelect: () => void; onConnect: () => void; onEdit: () => void
+function AutoRow({ group, count, selected, running, onSelect, onConnect }: {
+  group: Group; count: number; selected: boolean; running: boolean; onSelect: () => void; onConnect: () => void
+}): React.JSX.Element {
+  return (
+    <div className={`prow prow-auto ${selected ? 'selected' : ''} ${running ? 'live' : ''}`} onClick={onSelect} onDoubleClick={onConnect}>
+      <span className="prow-flag auto-ic"><Zap size={18} /></span>
+      <div className="prow-main">
+        <div className="prow-name">Авто — лучший сервер{running && <span className="live-dot" />}</div>
+        <div className="prow-addr">Раз в 5 минут меряю задержку {count} серверов группы «{group.name}» и переключаюсь на самый быстрый</div>
+      </div>
+      <span className="proto">AUTO</span>
+      <span />
+      <span />
+      <span />
+      {selected ? <Check size={16} className="prow-check" /> : <span />}
+    </div>
+  )
+}
+
+function QrDialog({ p, onClose }: { p: Profile; onClose: () => void }): React.JSX.Element {
+  const [img, setImg] = useState('')
+  useEffect(() => {
+    void call<string>('profile:link', p.id)
+      .then(async (l) => setImg(await QRCode.toDataURL(l, { margin: 1, width: 300, errorCorrectionLevel: 'M' })))
+      .catch((e: Error) => {
+        toast('error', e.message)
+        onClose()
+      })
+  }, [p.id])
+  return (
+    <Modal title="QR-код сервера" onClose={onClose}>
+      <p className="muted">Отсканируй в v2rayNG, Hiddify, Streisand или другом клиенте на телефоне. Ссылка заодно скопирована в буфер.</p>
+      <div className="qr-box">{img ? <img src={img} width={300} height={300} alt="QR-код" /> : <div className="qr-ph" />}</div>
+      <div className="qr-name">{p.name}</div>
+      <p className="muted small qr-warn">В коде полный доступ к серверу, не показывай его посторонним.</p>
+      <div className="modal-foot"><span /><button className="btn primary" onClick={onClose}>Готово</button></div>
+    </Modal>
+  )
+}
+
+function ProfileRow({ p, selected, running, onSelect, onConnect, onEdit, onQr }: {
+  p: Profile; selected: boolean; running: boolean; onSelect: () => void; onConnect: () => void; onEdit: () => void; onQr: () => void
 }): React.JSX.Element {
   const flag = nameFlag(p.name)
   const name = flag ? p.name.replace(flag, '').trim() : p.name
@@ -192,6 +245,7 @@ function ProfileRow({ p, selected, running, onSelect, onConnect, onEdit }: {
       <span className="prow-traffic">{traffic ? bytes(traffic) : ''}</span>
       <span className={`lat ${latencyClass(p.latency)}`}>{p.latency === undefined ? '—' : p.latency === null ? 'тайм-аут' : `${p.latency} мс`}</span>
       <div className="prow-actions" onClick={(e) => e.stopPropagation()}>
+        <button className="icon-btn" title="QR-код для телефона" onClick={onQr}><QrCode size={14} /></button>
         <button className="icon-btn" title="Скопировать ссылку" onClick={() => void act(call('profile:link', p.id), 'Ссылка скопирована')}><Share2 size={14} /></button>
         <button className="icon-btn" title="Изменить" onClick={onEdit}><Pencil size={14} /></button>
         <button className="icon-btn danger" title="Удалить" onClick={() => void act(call('profile:delete', [p.id]), 'Удалено')}><Trash2 size={14} /></button>
