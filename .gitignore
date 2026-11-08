@@ -1,0 +1,10 @@
+node_modules/
+out/
+dist/
+release/
+*.log
+.playwright-mcp/
+.e2e-data/
+.e2e-shots/
+resources/core/*
+!resources/core/.gitkeep

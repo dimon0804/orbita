@@ -1,0 +1,15 @@
+// Смоук собранного exe: ядро и правила найдены в resources, ядро стартует.
+import { _electron as electron } from 'playwright'
+const app = await electron.launch({ executablePath: 'release/win-unpacked/Orbita.exe', args: ['--no-elevate'], env: { ...process.env } })
+const win = await app.firstWindow()
+await win.waitForSelector('.dash')
+const call = (ch, ...a) => win.evaluate(([ch, a]) => window.orbita.call(ch, ...a), [ch, a])
+console.log('core:', await call('core:version'))
+const st = await call('state')
+if (!st.profiles.length) await call('neko:import')
+await call('mode', 'proxy')
+await call('settings', { bypassRu: true, blockAds: true })
+await call('connect')
+console.log('status:', (await call('state')).status.state, 'ip:', (await call('ip')).country_code)
+await call('disconnect')
+await app.close()

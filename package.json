@@ -1,0 +1,96 @@
+{
+  "name": "orbita",
+  "productName": "Orbita",
+  "version": "0.1.0",
+  "description": "Orbita — десктопный клиент для прокси и VPN на ядре sing-box",
+  "author": "dimon0804 <dimongamedeveloper@yandex.ru>",
+  "license": "MIT",
+  "main": "out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "start": "electron-vite preview",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "dist": "node scripts/fetch-core.mjs && electron-vite build && electron-builder --win",
+    "fetch-core": "node scripts/fetch-core.mjs",
+    "e2e": "node scripts/e2e.mjs"
+  },
+  "dependencies": {
+    "lucide-react": "^1.70.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "recharts": "^3.10.1",
+    "yaml": "^2.9.1"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.2.1",
+    "electron": "^45.2.3",
+    "electron-builder": "^26.18.0",
+    "electron-vite": "^6.0.0",
+    "playwright": "^1.65.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.6",
+    "vitest": "^5.1.0"
+  },
+  "build": {
+    "appId": "dev.dimon0804.orbita",
+    "productName": "Orbita",
+    "copyright": "© 2026 dimon0804",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "out/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/core",
+        "to": "core"
+      },
+      {
+        "from": "resources/rules",
+        "to": "rules"
+      },
+      {
+        "from": "resources/icons",
+        "to": "icons"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.ico",
+      "requestedExecutionLevel": "asInvoker",
+      "signAndEditExecutable": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "shortcutName": "Orbita",
+      "artifactName": "Orbita-Setup-${version}.${ext}"
+    },
+    "portable": {
+      "artifactName": "Orbita-Portable-${version}.${ext}"
+    }
+  }
+}
