@@ -342,7 +342,9 @@ async function checkUpdates(manual = false): Promise<UpdateInfo | null> {
   const info = await checkForUpdate((u, i) => netSession().fetch(u, i))
   const same = update?.latest === info.latest
   const wasKnown = same && update!.available
-  update = same ? { ...update!, ...info } : { ...info, stage: 'idle' }
+  // Обновляем на месте: скачивание держит ссылку на этот объект.
+  if (same) Object.assign(update!, info)
+  else update = { ...info, stage: 'idle' }
   if (info.available && !wasKnown) notify(`Вышла Orbita ${info.latest}`, 'Открой приложение, чтобы обновиться.', true)
   broadcast()
   return info
@@ -360,10 +362,19 @@ async function startDownload(): Promise<void> {
   u.error = undefined
   broadcast()
   try {
-    u.file = await downloadUpdate(u, (url, i) => netSession().fetch(url, i), (p) => {
-      u.progress = p
-      send('update:progress', p)
-    })
+    // Большой файл через нестабильную сеть: до трёх попыток.
+    for (let attempt = 1; ; attempt++) {
+      try {
+        u.file = await downloadUpdate(u, (url, i) => netSession().fetch(url, i), (p) => {
+          u.progress = p
+          send('update:progress', p)
+        })
+        break
+      } catch (e) {
+        if (attempt >= 3) throw e
+        await new Promise((r) => setTimeout(r, 3000))
+      }
+    }
     u.stage = 'ready'
   } catch (e) {
     u.stage = 'error'
