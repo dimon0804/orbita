@@ -1,4 +1,5 @@
 import type { ConnectMode, Outbound, Profile, RouteRule, Settings } from '@shared/types'
+import { isXray } from '@shared/xray'
 
 // Сборка конфига sing-box 1.14 из настроек и выбранного профиля.
 
@@ -13,6 +14,8 @@ export interface BuildInput {
   dataDir: string
   clashSecret: string
   clashPort: number
+  /** Локальные SOCKS-порты Xray для профилей с xhttp: id профиля → порт. */
+  xrayPorts?: Record<string, number>
 }
 
 type Json = Record<string, unknown>
@@ -59,11 +62,56 @@ function ruleToSingbox(r: RouteRule, remoteSets: Json[], rulesDir: string): Json
   return { [r.match]: values, ...target }
 }
 
+/** Профиль → outbound или endpoint sing-box. null — профиль в этот запуск не попадает. */
+export function toSingbox(p: Profile, xrayPorts: Record<string, number> = {}): { outbound?: Json; endpoint?: Json } | null {
+  const o = p.outbound as Json
+  if (isXray(p.outbound)) {
+    const port = xrayPorts[p.id]
+    if (!port) return null
+    return { outbound: { type: 'socks', tag: p.id, server: '127.0.0.1', server_port: port, version: '5' } }
+  }
+  if (o.type === 'wireguard') {
+    return {
+      endpoint: clean({
+        type: 'wireguard',
+        tag: p.id,
+        address: o.local_address,
+        private_key: o.private_key,
+        mtu: o.mtu,
+        peers: [
+          clean({
+            address: o.server,
+            port: o.server_port,
+            public_key: o.peer_public_key,
+            pre_shared_key: o.pre_shared_key,
+            allowed_ips: ['0.0.0.0/0', '::/0'],
+            reserved: o.reserved,
+            persistent_keepalive_interval: 25
+          })
+        ]
+      })
+    }
+  }
+  return { outbound: { ...stripTag(p.outbound), tag: p.id } }
+}
+
+function convert(profiles: Profile[], xrayPorts?: Record<string, number>): { ids: string[]; outbounds: Json[]; endpoints: Json[] } {
+  const ids: string[] = []
+  const outbounds: Json[] = []
+  const endpoints: Json[] = []
+  for (const p of profiles) {
+    const r = toSingbox(p, xrayPorts)
+    if (!r) continue
+    ids.push(p.id)
+    if (r.outbound) outbounds.push(r.outbound)
+    if (r.endpoint) endpoints.push(r.endpoint)
+  }
+  return { ids, outbounds, endpoints }
+}
+
 export function buildConfig(i: BuildInput): Json {
   const { settings: s, mode } = i
-  const ids = i.profiles.map((p) => p.id)
-
-  const outbounds: Json[] = i.profiles.map((p) => ({ ...stripTag(p.outbound), tag: p.id }))
+  const { ids, outbounds, endpoints } = convert(i.profiles, i.xrayPorts)
   if (ids.length > 1) {
     outbounds.push({
       type: 'urltest',
@@ -98,6 +146,8 @@ export function buildConfig(i: BuildInput): Json {
 
   // Правила маршрутизации
   const rules: Json[] = [{ action: 'sniff' }]
+  // Xray сам ходит к своим серверам; в TUN его трафик (и DNS) не должен вернуться в туннель.
+  if (mode === 'tun' && Object.keys(i.xrayPorts ?? {}).length) rules.push({ process_name: ['xray.exe'], outbound: 'direct' })
   if (mode === 'tun') rules.push({ protocol: 'dns', action: 'hijack-dns' })
   rules.push({ ip_is_private: true, outbound: 'direct' })
 
@@ -151,6 +201,7 @@ export function buildConfig(i: BuildInput): Json {
     dns,
     inbounds,
     outbounds,
+    ...(endpoints.length ? { endpoints } : {}),
     route: {
       rules,
       ...(ruleSets.length ? { rule_set: ruleSets } : {}),
@@ -169,15 +220,22 @@ export function buildConfig(i: BuildInput): Json {
 }
 
 /** Конфиг только для замера задержек: никаких входов, кроме clash api. */
-export function buildTestConfig(profiles: Profile[], port: number, secret: string): Json {
+export function buildTestConfig(
+  profiles: Profile[],
+  port: number,
+  secret: string,
+  xrayPorts?: Record<string, number>,
+  /** Для теста скорости: локальный mixed-вход, весь трафик которого идёт в этот профиль. */
+  speed?: { listenPort: number; profileId: string }
+): Json {
+  const { outbounds, endpoints } = convert(profiles, xrayPorts)
   return {
     log: { level: 'error' },
     dns: { servers: [{ type: 'local', tag: 'local' }] },
-    outbounds: [
-      ...profiles.map((p) => ({ ...stripTag(p.outbound), tag: p.id })),
-      { type: 'direct', tag: 'direct' }
-    ],
-    route: { final: 'direct', default_domain_resolver: 'local' },
+    ...(speed ? { inbounds: [{ type: 'mixed', tag: 'speed-in', listen: '127.0.0.1', listen_port: speed.listenPort }] } : {}),
+    outbounds: [...outbounds, { type: 'direct', tag: 'direct' }],
+    ...(endpoints.length ? { endpoints } : {}),
+    route: { final: speed ? speed.profileId : 'direct', default_domain_resolver: 'local' },
     experimental: { clash_api: { external_controller: `127.0.0.1:${port}`, secret } }
   }
 }
@@ -202,4 +260,10 @@ function localSet(tag: string, dir: string): Json {
 function stripTag(o: Outbound): Outbound {
   const { tag: _t, ...rest } = o as Outbound & { tag?: unknown }
   return rest
+}
+
+function clean(o: Json): Json {
+  const out: Json = {}
+  for (const [k, v] of Object.entries(o)) if (v !== undefined && v !== null && v !== '') out[k] = v
+  return out
 }

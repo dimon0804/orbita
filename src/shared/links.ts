@@ -2,14 +2,16 @@
 // Чистый TS без node-зависимостей: работает и в renderer, и в main.
 // Формат outbound — sing-box 1.14 (без tag).
 //
-// Не поддерживается (parseLink вернёт null):
-//  - wireguard:// и wg:// — в sing-box 1.14 WireGuard есть только как endpoint,
-//    outbound с типом wireguard ядро не принимает (проверено `sing-box check`);
-//  - транспорты xhttp/splithttp/kcp — их нет в sing-box;
-//  - ss-плагины, кроме obfs-local (simple-obfs) и v2ray-plugin.
+// Особые случаи:
+//  - VLESS/Trojan с транспортом xhttp/splithttp — профиль типа 'xray', его ведёт второе ядро (см. xray.ts);
+//  - wireguard:// и .conf — профиль типа 'wireguard'; в sing-box 1.14 это endpoint, а не outbound,
+//    сборщик конфига переносит его в endpoints.
+// Не поддерживается (parseLink вернёт null): kcp и прочие транспорты Xray, ss-плагины,
+// кроме obfs-local (simple-obfs) и v2ray-plugin.
 
 import { parse as parseYaml } from 'yaml'
 import type { Outbound, ParsedProfile, SubscriptionInfo } from './types'
+import { XRAY_TRANSPORTS, isXray, makeXray, xrayToLink } from './xray'
 
 type Dict = Record<string, unknown>
 
@@ -264,9 +266,16 @@ function streamFromQuery(q: Record<string, string>, defaultSecurity: string): Di
 
 // ---------- отдельные протоколы ----------
 
+function viaXray(u: Uri, protocol: 'vless' | 'trojan', port: number): ParsedProfile | null {
+  if (!XRAY_TRANSPORTS.has((u.query.type || '').toLowerCase())) return null
+  return { name: nameOf(u), outbound: makeXray(protocol, u.host, port, dec(u.userinfo!), u.query) }
+}
+
 function parseVless(u: Uri): ParsedProfile | null {
   const port = validPort(u.port)
   if (!port || !u.userinfo) return null
+  const x = viaXray(u, 'vless', port)
+  if (x) return x
   const stream = streamFromQuery(u.query, 'none')
   if (!stream) return null
   const ob: Outbound = clean({
@@ -284,6 +293,8 @@ function parseVless(u: Uri): ParsedProfile | null {
 function parseTrojan(u: Uri): ParsedProfile | null {
   const port = validPort(u.port)
   if (!port || !u.userinfo) return null
+  const x = viaXray(u, 'trojan', port)
+  if (x) return x
   const stream = streamFromQuery(u.query, 'tls')
   if (!stream) return null
   const ob: Outbound = clean({
@@ -556,6 +567,103 @@ function parseHttp(u: Uri): ParsedProfile | null {
   return { name: nameOf(u), outbound: ob }
 }
 
+/** Адрес интерфейса без маски получает /32 или /128 — иначе sing-box его не примет. */
+function withMask(a: string): string {
+  if (a.includes('/')) return a
+  return a.includes(':') ? `${a}/128` : `${a}/32`
+}
+
+function wgReserved(v: string | undefined): number[] | undefined {
+  if (!v) return undefined
+  const nums = v.split(',').map((x) => Number(x.trim()))
+  if (nums.length === 3 && nums.every((n) => Number.isInteger(n) && n >= 0 && n < 256)) return nums
+  try {
+    const b = b64decode(v) // reserved в base64 (WARP-ссылки)
+    if (b.length === 3) return [...b].map((c) => c.charCodeAt(0))
+  } catch {
+    /* не base64 */
+  }
+  return undefined
+}
+
+function wgOutbound(o: {
+  server: string
+  port: number
+  privateKey?: string
+  publicKey?: string
+  psk?: string
+  address?: string
+  mtu?: string
+  reserved?: string
+}): Outbound | null {
+  if (!o.privateKey || !o.publicKey) return null
+  const addr = (o.address || '').split(',').map((x) => x.trim()).filter(Boolean).map(withMask)
+  return clean({
+    type: 'wireguard',
+    server: o.server,
+    server_port: o.port,
+    private_key: o.privateKey,
+    peer_public_key: o.publicKey,
+    pre_shared_key: o.psk,
+    local_address: addr.length ? addr : ['172.16.0.2/32'],
+    mtu: toInt(o.mtu),
+    reserved: wgReserved(o.reserved)
+  })
+}
+
+function parseWireguard(u: Uri): ParsedProfile | null {
+  const port = validPort(u.port)
+  if (!port || !u.userinfo) return null
+  const q = Object.fromEntries(Object.entries(u.query).map(([k, v]) => [k.toLowerCase().replace(/[_-]/g, ''), v]))
+  const ob = wgOutbound({
+    server: u.host,
+    port,
+    privateKey: dec(u.userinfo),
+    publicKey: q.publickey || q.peerpublickey,
+    psk: q.presharedkey || q.psk,
+    address: q.address || q.ip || q.localaddress,
+    mtu: q.mtu,
+    reserved: q.reserved
+  })
+  return ob ? { name: nameOf(u), outbound: ob } : null
+}
+
+/** Файл .conf WireGuard ([Interface] + [Peer]) → профиль. */
+export function parseWireguardConf(text: string, name = 'WireGuard'): ParsedProfile | null {
+  const sec: Record<string, Record<string, string>> = {}
+  let cur = ''
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.replace(/[#;].*$/, '').trim()
+    if (!line) continue
+    const h = /^\[(\w+)\]$/.exec(line)
+    if (h) {
+      cur = h[1].toLowerCase()
+      if (!sec[cur]) sec[cur] = {} // берём первый [Peer]
+      continue
+    }
+    const eq = line.indexOf('=')
+    if (eq < 0 || !cur) continue
+    const k = line.slice(0, eq).trim().toLowerCase()
+    if (!(k in sec[cur])) sec[cur][k] = line.slice(eq + 1).trim()
+  }
+  const i = sec.interface
+  const p = sec.peer
+  if (!i || !p?.endpoint) return null
+  const ep = /^\[?([^\]]+?)\]?:(\d+)$/.exec(p.endpoint)
+  const port = ep ? validPort(ep[2]) : null
+  if (!ep || !port) return null
+  const ob = wgOutbound({
+    server: ep[1],
+    port,
+    privateKey: i.privatekey,
+    publicKey: p.publickey,
+    psk: p.presharedkey,
+    address: i.address,
+    mtu: i.mtu
+  })
+  return ob ? { name, outbound: ob } : null
+}
+
 function parseAnytls(u: Uri): ParsedProfile | null {
   const port = validPort(u.port)
   if (!port || !u.userinfo) return null
@@ -606,7 +714,7 @@ export function parseLink(link: string): ParsedProfile | null {
         return parseAnytls(u)
       case 'wireguard':
       case 'wg':
-        return null // в sing-box 1.14 только endpoint, см. шапку файла
+        return parseWireguard(u)
       default:
         return null
     }
@@ -621,11 +729,154 @@ const SERVICE_TYPES = new Set(['direct', 'block', 'dns', 'selector', 'urltest', 
 function fromSingbox(j: Dict): ParsedProfile[] {
   const list = Array.isArray(j.outbounds) ? (j.outbounds as Dict[]) : []
   const out: ParsedProfile[] = []
+  for (const e of Array.isArray(j.endpoints) ? (j.endpoints as Dict[]) : []) {
+    if (e?.type !== 'wireguard') continue
+    const peer = (Array.isArray(e.peers) ? (e.peers as Dict[]) : [])[0]
+    if (!peer?.address || !peer.port) continue
+    out.push({
+      name: str(e.tag) || `${peer.address}:${peer.port}`,
+      outbound: clean({
+        type: 'wireguard',
+        server: str(peer.address),
+        server_port: toInt(peer.port),
+        private_key: str(e.private_key),
+        peer_public_key: str(peer.public_key),
+        pre_shared_key: str(peer.pre_shared_key),
+        local_address: Array.isArray(e.address) ? (e.address as string[]) : splitList(e.address),
+        mtu: toInt(e.mtu),
+        reserved: Array.isArray(peer.reserved) ? (peer.reserved as number[]) : undefined
+      }) as Outbound
+    })
+  }
   for (const o of list) {
     if (!o || typeof o.type !== 'string' || SERVICE_TYPES.has(o.type)) continue
     const { tag, detour: _detour, ...rest } = o // detour ссылается на чужой tag — выкидываем
     const name = str(tag) || `${str(rest.server) ?? o.type}:${str(rest.server_port) ?? ''}`
     out.push({ name, outbound: rest as Outbound })
+  }
+  return out
+}
+
+// ---------- Xray JSON (то, что панели отдают v2rayN) ----------
+
+/** streamSettings Xray → query-параметры ссылки. */
+function xrayStreamQuery(st: Dict): Record<string, string> {
+  const q: Record<string, string> = {}
+  const set = (k: string, v: unknown): void => {
+    const sv = Array.isArray(v) ? v.join(',') : str(v)
+    if (sv) q[k] = sv
+  }
+  let net = (str(st.network) || 'tcp').toLowerCase()
+  if (net === 'raw') net = 'tcp'
+  if (net === 'h2') net = 'http'
+  set('type', net)
+  const security = (str(st.security) || 'none').toLowerCase()
+  set('security', security)
+  const tls = (st.tlsSettings as Dict) || {}
+  const reality = (st.realitySettings as Dict) || {}
+  if (security === 'tls') {
+    set('sni', tls.serverName)
+    set('alpn', tls.alpn)
+    set('fp', tls.fingerprint)
+    if (truthy(tls.allowInsecure)) q.allowInsecure = '1'
+  } else if (security === 'reality') {
+    set('sni', reality.serverName)
+    set('pbk', reality.publicKey ?? reality.password)
+    set('sid', reality.shortId)
+    set('spx', reality.spiderX)
+    set('fp', reality.fingerprint)
+  }
+  const pick = (k: string): Dict => ((st[k] as Dict) || {}) as Dict
+  const hostOf = (o: Dict): unknown => o.host ?? (o.headers as Dict | undefined)?.Host
+  if (net === 'ws') {
+    const o = pick('wsSettings')
+    set('path', o.path)
+    set('host', hostOf(o))
+  } else if (net === 'grpc') {
+    set('serviceName', pick('grpcSettings').serviceName)
+  } else if (net === 'httpupgrade') {
+    const o = pick('httpupgradeSettings')
+    set('path', o.path)
+    set('host', hostOf(o))
+  } else if (net === 'http') {
+    const o = { ...pick('httpSettings'), ...pick('h2Settings') }
+    set('path', o.path)
+    set('host', o.host)
+  } else if (net === 'xhttp' || net === 'splithttp') {
+    const o = { ...pick('splithttpSettings'), ...pick('xhttpSettings') }
+    set('path', o.path)
+    set('host', o.host)
+    set('mode', o.mode)
+    if (o.extra && typeof o.extra === 'object') q.extra = JSON.stringify(o.extra)
+  }
+  return q
+}
+
+function qsRaw(q: Record<string, string>): string {
+  const parts = Object.entries(q).map(([k, v]) => `${enc(k)}=${enc(v)}`)
+  return parts.length ? '?' + parts.join('&') : ''
+}
+
+/** Один outbound Xray → профиль (через ссылку, чтобы не дублировать разбор). */
+function fromXrayOutbound(o: Dict, name: string): ParsedProfile | null {
+  const proto = str(o.protocol)
+  const set = (o.settings as Dict) || {}
+  const st = (o.streamSettings as Dict) || {}
+  // старая форма vnext/servers и новая плоская
+  const node = ((set.vnext as Dict[])?.[0] ?? (set.servers as Dict[])?.[0] ?? set) as Dict
+  const user = ((node.users as Dict[])?.[0] ?? node) as Dict
+  const host = str(node.address)
+  const port = toInt(node.port)
+  if (!host || !port) return null
+  const h = hostForUri(host)
+  const q = xrayStreamQuery(st)
+  let link: string | null = null
+  if (proto === 'vless') {
+    if (str(user.flow)) q.flow = str(user.flow)!
+    if (str(user.encryption) && user.encryption !== 'none') q.encryption = str(user.encryption)!
+    link = `vless://${enc(String(user.id))}@${h}:${port}${qsRaw(q)}`
+  } else if (proto === 'trojan') {
+    link = `trojan://${enc(String(user.password ?? node.password))}@${h}:${port}${qsRaw(q)}`
+  } else if (proto === 'shadowsocks') {
+    link = `ss://${enc(String(node.method))}:${enc(String(node.password))}@${h}:${port}`
+  } else if (proto === 'vmess') {
+    link =
+      'vmess://' +
+      b64encode(
+        JSON.stringify(
+          clean({
+            v: '2', ps: name, add: host, port: String(port), id: user.id, aid: String(user.alterId ?? 0),
+            scy: user.security ?? 'auto', net: q.type, type: 'none', host: q.host,
+            path: q.type === 'grpc' ? q.serviceName : q.path,
+            tls: q.security === 'none' ? '' : q.security, sni: q.sni, alpn: q.alpn, fp: q.fp
+          })
+        )
+      )
+  }
+  if (!link) return null
+  const p = parseLink(link)
+  return p ? { ...p, name } : null
+}
+
+const XRAY_PROXY = new Set(['vless', 'trojan', 'vmess', 'shadowsocks'])
+
+/** Xray JSON: один конфиг или массив конфигов (по серверу в каждом, имя в remarks). */
+function fromXrayJson(j: unknown): ParsedProfile[] {
+  const configs = (Array.isArray(j) ? j : [j]) as Dict[]
+  const out: ParsedProfile[] = []
+  for (const c of configs) {
+    const obs = (Array.isArray(c?.outbounds) ? (c.outbounds as Dict[]) : []).filter((o) => XRAY_PROXY.has(String(o?.protocol)))
+    // в конфиге бывают запасные цепочки (dialerProxy) — берём только outbound'ы верхнего уровня
+    for (const o of obs) {
+      const remark = str(c.remarks)
+      const name = remark ? (obs.length > 1 ? `${remark} · ${str(o.tag) ?? ''}` : remark) : str(o.tag) ?? 'Xray'
+      try {
+        const p = fromXrayOutbound(o, name)
+        if (p) out.push(p)
+      } catch {
+        /* битый outbound пропускаем */
+      }
+    }
   }
   return out
 }
@@ -796,9 +1047,13 @@ function fromLines(text: string): ParsedProfile[] {
 export function parseSubscription(text: string): ParsedProfile[] {
   const s = text.replace(/^﻿/, '').trim()
   if (!s) return []
-  if (s.startsWith('{')) {
+  if (s.startsWith('{') || s.startsWith('[')) {
     try {
-      return fromSingbox(JSON.parse(s))
+      const j = JSON.parse(s)
+      const isXrayJson = (Array.isArray(j) ? j : [j]).some(
+        (c: Dict) => Array.isArray(c?.outbounds) && (c.outbounds as Dict[]).some((o) => typeof o?.protocol === 'string')
+      )
+      return isXrayJson ? fromXrayJson(j) : fromSingbox(j)
     } catch {
       /* не JSON — пробуем дальше */
     }
@@ -812,6 +1067,10 @@ export function parseSubscription(text: string): ParsedProfile[] {
     } catch {
       /* битый YAML */
     }
+  }
+  if (/^\s*\[Interface\]/im.test(s) && /^\s*\[Peer\]/im.test(s)) {
+    const wg = parseWireguardConf(s)
+    return wg ? [wg] : []
   }
   if (s.includes('://')) return fromLines(s)
   const decoded = tryB64(s)
@@ -884,6 +1143,7 @@ function tlsSimpleQuery(tls: Dict | undefined): Record<string, unknown> {
 
 /** Профиль → ссылка для «поделиться». null — тип не поддерживается. */
 export function toLink(p: ParsedProfile): string | null {
+  if (isXray(p.outbound)) return xrayToLink(p.outbound, p.name)
   const o = p.outbound as Dict
   const host = hostForUri(String(o.server ?? ''))
   const port = o.server_port
@@ -969,6 +1229,18 @@ export function toLink(p: ParsedProfile): string | null {
       )
     case 'anytls':
       return `anytls://${enc(String(o.password))}@${host}:${port}` + qs(tlsSimpleQuery(tls)) + tail(p.name)
+    case 'wireguard':
+      return (
+        `wireguard://${enc(String(o.private_key))}@${host}:${port}` +
+        qs({
+          publickey: o.peer_public_key,
+          presharedkey: o.pre_shared_key,
+          address: Array.isArray(o.local_address) ? (o.local_address as string[]).join(',') : undefined,
+          mtu: o.mtu,
+          reserved: Array.isArray(o.reserved) ? (o.reserved as number[]).join(',') : undefined
+        }) +
+        tail(p.name)
+      )
     case 'socks':
     case 'http': {
       const scheme =

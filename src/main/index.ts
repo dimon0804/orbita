@@ -428,16 +428,25 @@ async function updateSubscription(groupId: string): Promise<number> {
   const d = db()
   const g = d.groups.find((x) => x.id === groupId)
   if (!g?.url) throw new Error('Это не подписка')
-  // Панели отдают разный формат в зависимости от User-Agent. Начинаем с sing-box,
-  // если не разобралось — пробуем Clash и v2rayN.
+  // Панели отдают разный формат и разный набор серверов в зависимости от User-Agent:
+  // sing-box-формат теряет xhttp, Clash — часть протоколов. Спрашиваем всеми и берём самый полный ответ.
   const agents = g.userAgent ? [g.userAgent] : [...SUB_AGENTS]
   let res: Awaited<ReturnType<typeof fetchSubscription>> | null = null
   let parsed: ReturnType<typeof parseSubscription> = []
+  let lastErr: unknown = null
   for (const ua of agents) {
-    res = await fetchSubscription(g.url, ua)
-    parsed = parseSubscription(res.text)
-    if (parsed.length) break
+    try {
+      const r = await fetchSubscription(g.url, ua)
+      const p = parseSubscription(r.text)
+      if (p.length > parsed.length || !res) {
+        res = r
+        parsed = p
+      }
+    } catch (e) {
+      lastErr = e
+    }
   }
+  if (!res && lastErr) throw lastErr
   if (!res || !parsed.length) throw new Error('В подписке не нашлось серверов')
   // Сохраняем статистику профилей с тем же именем и выбранный профиль.
   const old = d.profiles.filter((p) => p.groupId === groupId)

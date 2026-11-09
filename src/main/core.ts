@@ -4,7 +4,8 @@ import { EventEmitter } from 'events'
 import { unlinkSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { randomBytes } from 'crypto'
-import { createServer } from 'net'
+import { freePort } from './ports'
+import { XrayRunner } from './xray'
 import type { ConnectMode, CoreStatus, LogLine, Profile, Settings } from '@shared/types'
 import { buildConfig, buildTestConfig } from './configBuilder'
 import { coreBin, rulesDir } from './paths'
@@ -34,16 +35,7 @@ function checkConfig(path: string): Promise<string | null> {
   })
 }
 
-export function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const srv = createServer()
-    srv.listen(0, '127.0.0.1', () => {
-      const port = (srv.address() as { port: number }).port
-      srv.close(() => resolve(port))
-    })
-    srv.on('error', reject)
-  })
-}
+export { freePort }
 
 function parseLevel(line: string): LogLine['level'] {
   const m = line.match(/^(TRACE|DEBUG|INFO|WARN|ERROR|FATAL|PANIC)/i)
@@ -61,6 +53,7 @@ export class Core extends EventEmitter {
   private mixedPort = 0
   private trafficAbort: AbortController | null = null
   private stopping = false
+  private xray = new XrayRunner(dataDir(), (level, text) => this.log(level, text))
 
   private log(level: LogLine['level'], text: string): void {
     const line = { t: Date.now(), level, text }
@@ -95,6 +88,18 @@ export class Core extends EventEmitter {
     this.port = await freePort()
     this.mixedPort = o.settings.mixedPort
 
+    let xrayPorts: Record<string, number> = {}
+    try {
+      xrayPorts = await this.xray.start(o.profiles)
+    } catch (e) {
+      // xhttp-серверы выпадут из группы, остальные работают
+      this.log('error', String(e))
+      if (o.profiles.find((p) => p.id === o.selected)?.outbound.type === 'xray') {
+        this.setStatus({ state: 'error', error: 'Xray не запустился' })
+        throw e
+      }
+    }
+
     const cfgPath = join(dataDir(), 'config.json')
     const write = (profiles: Profile[]): void => {
       const cfg = buildConfig({
@@ -105,7 +110,8 @@ export class Core extends EventEmitter {
         rulesDir: rulesDir(),
         dataDir: dataDir(),
         clashSecret: this.secret,
-        clashPort: this.port
+        clashPort: this.port,
+        xrayPorts
       })
       writeFileSync(cfgPath, JSON.stringify(cfg, null, 2))
     }
@@ -121,6 +127,7 @@ export class Core extends EventEmitter {
     }
     if (err) {
       this.log('error', err)
+      await this.xray.stop()
       this.setStatus({ state: 'error', error: err.split('\n').pop() })
       throw new Error(err)
     }
@@ -147,6 +154,7 @@ export class Core extends EventEmitter {
       if (this.proc !== proc) return
       this.proc = null
       this.stopTraffic()
+      void this.xray.stop()
       this.emit('pid', undefined)
       if (this.stopping) {
         this.setStatus({ state: 'stopped' })
@@ -180,6 +188,7 @@ export class Core extends EventEmitter {
   async stop(): Promise<void> {
     const proc = this.proc
     if (!proc) {
+      await this.xray.stop()
       if (this.status.state !== 'stopped') this.setStatus({ state: 'stopped' })
       return
     }
@@ -199,6 +208,7 @@ export class Core extends EventEmitter {
       proc.kill()
     })
     if (this.proc === proc) this.proc = null
+    await this.xray.stop()
     this.emit('pid', undefined)
     this.setStatus({ state: 'stopped' })
     this.log('info', 'Ядро остановлено')
@@ -312,21 +322,32 @@ export async function measureLatency(
   const secret = randomBytes(8).toString('hex')
   const cfgPath = join(dataDir(), `test-${port}.json`)
 
-  let list = profiles
-  writeFileSync(cfgPath, JSON.stringify(buildTestConfig(list, port, secret)))
+  const xray = new XrayRunner(dataDir())
+  let xp: Record<string, number> = {}
+  try {
+    xp = await xray.start(profiles)
+  } catch {
+    /* xhttp-профили получат «нет ответа» */
+  }
+  let list = profiles.filter((p) => p.outbound.type !== 'xray' || xp[p.id])
+  for (const p of profiles) if (!list.includes(p)) onResult(p.id, null)
+  writeFileSync(cfgPath, JSON.stringify(buildTestConfig(list, port, secret, xp)))
   const err = await checkConfig(cfgPath)
   if (err) {
     // Отсеиваем профили, которые ядро не принимает.
     const good: Profile[] = []
-    for (const p of profiles) {
-      writeFileSync(cfgPath, JSON.stringify(buildTestConfig([p], port, secret)))
+    for (const p of list) {
+      writeFileSync(cfgPath, JSON.stringify(buildTestConfig([p], port, secret, xp)))
       if (await checkConfig(cfgPath)) onResult(p.id, null)
       else good.push(p)
     }
     list = good
-    writeFileSync(cfgPath, JSON.stringify(buildTestConfig(list, port, secret)))
+    writeFileSync(cfgPath, JSON.stringify(buildTestConfig(list, port, secret, xp)))
   }
-  if (!list.length) return
+  if (!list.length) {
+    await xray.stop()
+    return
+  }
 
   const proc = spawn(coreBin(), ['run', '-c', cfgPath, '--disable-color'], { windowsHide: true, cwd: dataDir() })
   const base = `http://127.0.0.1:${port}`
@@ -360,6 +381,7 @@ export async function measureLatency(
     await Promise.all(Array.from({ length: Math.min(12, list.length) }, worker))
   } finally {
     proc.kill()
+    await xray.stop()
     try {
       unlinkSync(cfgPath)
     } catch {

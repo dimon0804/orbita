@@ -2,6 +2,7 @@
 import { readdirSync, readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Outbound } from '../shared/types'
+import { makeXray, XRAY_TRANSPORTS } from '../shared/xray'
 
 type Dict = Record<string, any>
 
@@ -99,6 +100,24 @@ export function nekoBeanToOutbound(type: string, b: Dict): Outbound | null {
     case 'vless':
     case 'trojan':
     case 'vmess': {
+      if (type !== 'vmess' && XRAY_TRANSPORTS.has(String(s.net))) {
+        // xhttp ведёт Xray; reality у NekoBox — это sec=tls плюс ключ pbk
+        return makeXray(type as 'vless' | 'trojan', String(b.addr), Number(b.port), String(b.pass ?? ''), {
+          type: 'xhttp',
+          security: s.pbk ? 'reality' : String(s.sec || 'none'),
+          sni: s.sni,
+          fp: s.utls,
+          pbk: s.pbk,
+          sid: s.sid,
+          alpn: s.alpn,
+          path: s.path,
+          host: s.host,
+          mode: s.xhttp_mode,
+          extra: s.xhttp_extra,
+          allowInsecure: s.insecure ? '1' : '',
+          flow: b.flow
+        })
+      }
       const transport = transportFrom(s)
       if (transport === null) return null
       const tls = tlsFrom(s)

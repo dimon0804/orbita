@@ -126,9 +126,8 @@ describe('parseLink', () => {
 
   it('ipv6, мусор и неподдерживаемое', () => {
     expect(parseLink(LINKS.ipv6)!.outbound).toMatchObject({ server: '2001:db8::1' })
-    expect(parseLink('wireguard://key@1.2.3.4:51820?publickey=x')).toBeNull()
-    expect(parseLink('wg://key@1.2.3.4:51820')).toBeNull()
-    expect(parseLink(`vless://${UUID}@x.example.com:443?type=xhttp&security=tls`)).toBeNull()
+    expect(parseLink('wg://key@1.2.3.4:51820')).toBeNull() // без публичного ключа сервера
+    expect(parseLink(`vless://${UUID}@x.example.com:443?type=kcp&security=tls`)).toBeNull()
     expect(parseLink('vless://nohost')).toBeNull()
     expect(parseLink('просто текст')).toBeNull()
     expect(parseLink('vmess://!!!')).toBeNull()

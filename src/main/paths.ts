@@ -8,3 +8,4 @@ export const resDir = (): string =>
 export const coreBin = (): string => join(resDir(), 'core', 'sing-box.exe')
 export const rulesDir = (): string => join(resDir(), 'rules')
 export const iconPath = (name: string): string => join(resDir(), 'icons', name)
+export const xrayBin = (): string => join(resDir(), 'core', 'xray.exe')
