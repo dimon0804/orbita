@@ -17,7 +17,11 @@ const GH = 'https://github.com/dimon0804/orbita'
 export default function About({ st }: { st: AppState }): React.JSX.Element {
   const [core, setCore] = useState('…')
   const [checking, setChecking] = useState(false)
-  useEffect(() => void call<string>('core:version').then(setCore), [])
+  const [xray, setXray] = useState('…')
+  useEffect(() => {
+    void call<string>('core:version').then(setCore)
+    void call<string>('xray:version').then(setXray)
+  }, [])
 
   const check = async (): Promise<void> => {
     setChecking(true)
@@ -33,10 +37,11 @@ export default function About({ st }: { st: AppState }): React.JSX.Element {
         <div className="about-logo"><Logo size={56} on /></div>
         <div>
           <h1>Orbita</h1>
-          <div className="muted">Десктопный клиент для прокси и VPN на ядре sing-box</div>
+          <div className="muted">Десктопный клиент для прокси и VPN на ядрах sing-box и Xray</div>
           <div className="about-ver">
             <span className="pill">версия {st.version}{st.portable ? ' · портативная' : ''}</span>
             <span className="pill">sing-box {core}</span>
+            <span className="pill">Xray {xray}</span>
           </div>
         </div>
       </section>
@@ -70,7 +75,7 @@ export default function About({ st }: { st: AppState }): React.JSX.Element {
       </section>
 
       <p className="muted small about-foot">
-        © 2026 dimon0804 · MIT. Ядро sing-box — GPL-3.0, флаги — Twemoji (CC-BY 4.0).
+        © 2026 dimon0804 · MIT. Ядро sing-box — GPL-3.0, Xray — MPL-2.0, флаги — Twemoji (CC-BY 4.0).
         <br />Горячая клавиша подключения: <b>{st.settings.hotkey || 'выключена'}</b>
       </p>
     </div>

@@ -1,0 +1,65 @@
+name: release
+
+# Тег vX.Y.Z → сборка установщика и портативной версии под Windows и выкладка в релиз.
+# Если релиз с этим тегом уже создан руками (с описанием), файлы просто доливаются в него.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Ядра sing-box и Xray
+        run: npm run fetch-core
+
+      - name: Проверки
+        run: |
+          npm run typecheck
+          npm test
+
+      - name: Версия в package.json совпадает с тегом
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          v=$(node -p "require('./package.json').version")
+          [ "v$v" = "${GITHUB_REF_NAME}" ] || { echo "package.json $v, а тег ${GITHUB_REF_NAME}"; exit 1; }
+
+      - name: Сборка
+        run: |
+          npx electron-vite build
+          npx electron-builder --win --publish never
+
+      - name: Выкладка в релиз
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          files=(release/Orbita-Setup-*.exe release/Orbita-Portable-*.exe release/*.blockmap)
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "${files[@]}" --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" "${files[@]}" --title "Orbita ${GITHUB_REF_NAME#v}" --generate-notes
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        with:
+          name: orbita-windows
+          path: |
+            release/*.exe
+          retention-days: 7

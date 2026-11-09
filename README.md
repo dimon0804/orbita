@@ -4,13 +4,14 @@
 
 # Orbita
 
-**Десктопный клиент для прокси и VPN под Windows на ядре sing-box**
+**Десктопный клиент для прокси и VPN под Windows на ядрах sing-box и Xray**
 
 Подписки, ссылки, SOCKS/HTTP-прокси, режим TUN для всего трафика, живая статистика и логи — в одном аккуратном окне.
 
 [![Релиз](https://img.shields.io/github/v/release/dimon0804/orbita?label=скачать&color=7c5cff)](https://github.com/dimon0804/orbita/releases/latest)
 ![Windows](https://img.shields.io/badge/Windows-10%20%7C%2011-0078d4)
 ![Ядро](https://img.shields.io/badge/sing--box-1.14.4-22d3ee)
+![Xray](https://img.shields.io/badge/Xray-26.10.31-0ea5e9)
 ![Лицензия](https://img.shields.io/github/license/dimon0804/orbita)
 
 [English](README.en.md)
@@ -21,8 +22,10 @@
 
 ## Что умеет
 
-- **Протоколы:** VLESS (в том числе Reality и Vision), VMess, Trojan, Shadowsocks (вкл. 2022), Hysteria 2 и Hysteria, TUIC, AnyTLS, SOCKS4/4a/5, HTTP и HTTPS.
-- **Подписки:** base64, построчные ссылки, Clash YAML, sing-box JSON. Квота и срок действия из заголовков, автообновление, подбор формата под панель.
+- **Протоколы:** VLESS (в том числе Reality, Vision и xhttp), VMess, Trojan, Shadowsocks (вкл. 2022), Hysteria 2 и Hysteria, TUIC, AnyTLS, WireGuard, SOCKS4/4a/5, HTTP и HTTPS.
+- **xhttp через второе ядро.** Серверы с транспортом xhttp ведёт Xray, всё остальное — sing-box. Для тебя это обычные серверы в списке: TUN, правила, «Авто», замер задержки работают одинаково.
+- **Подписки:** base64, построчные ссылки, Clash YAML, sing-box JSON, Xray JSON. Квота и срок действия из заголовков, автообновление. Orbita спрашивает панель в нескольких форматах и берёт самый полный ответ — так не теряются xhttp-серверы.
+- **WireGuard:** ссылки `wireguard://` и файлы `.conf`.
 - **Три режима подключения:**
   - *Системный прокси* — браузеры и большинство программ;
   - *TUN* — виртуальный адаптер, ловит трафик всех программ, игр и UDP;
@@ -36,6 +39,8 @@
 - **Импорт из NekoBox/NekoRay** в один клик: группы, подписки, серверы.
 - **Авто — лучший сервер:** Orbita сама меряет задержку серверов группы и держит самый быстрый.
 - **QR-код сервера** — отсканировать на телефоне в v2rayNG, Hiddify, Streisand.
+- **Тест скорости** любого сервера за 10 секунд, даже без подключения.
+- **Kill switch:** если ядро упало, трафик не уходит мимо VPN. В системном режиме прокси остаётся на месте, в TUN интернет закрывается брандмауэром Windows до переподключения. По умолчанию выключен.
 - **Горячая клавиша** подключения из любой программы (по умолчанию `Ctrl+Alt+O`), уведомления Windows, автопереподключение, если ядро упало.
 - **Обновления:** Orbita сама проверяет релизы на GitHub и обновляется в один клик.
 - Трей с переключением режимов, автозапуск, тёмная и светлая темы, выбор акцентного цвета.
@@ -53,11 +58,14 @@
 ```bash
 npm install
 npm run dev        # разработка
-npm test           # тесты парсеров ссылок и подписок
+npm run fetch-core # скачать sing-box и Xray в resources/core
+npm test           # парсеры ссылок и подписок, проверка собранных конфигов самими ядрами
 npm run dist       # установщик и портативная версия в release/
 ```
 
-Ядро `sing-box.exe` лежит в `resources/core`, наборы правил — в `resources/rules`.
+Ядра `sing-box.exe` и `xray.exe` лежат в `resources/core` (в git их нет), наборы правил — в `resources/rules`.
+
+Релиз собирается сам: тег `vX.Y.Z` → GitHub Actions собирает установщик и портативную версию и кладёт их в релиз.
 
 ## Устройство
 
@@ -66,6 +74,8 @@ npm run dist       # установщик и портативная версия
 | Окно, трей, IPC, подписки | `src/main/index.ts` |
 | Запуск ядра, Clash API, замер задержки | `src/main/core.ts` |
 | Сборка конфига sing-box | `src/main/configBuilder.ts` |
+| Второе ядро Xray для xhttp | `src/main/xray.ts`, `src/shared/xray.ts` |
+| Kill switch (брандмауэр Windows) | `src/main/killswitch.ts` |
 | Права администратора и автозапуск | `src/main/admin.ts` |
 | Системный прокси Windows | `src/main/sysproxy.ts` |
 | Разбор ссылок и подписок | `src/shared/links.ts` |
@@ -74,8 +84,8 @@ npm run dist       # установщик и портативная версия
 
 ## Ограничения
 
-- Транспорт **xhttp** (Xray) ядро sing-box не поддерживает, такие серверы пропускаются при импорте.
-- WireGuard-ссылки пока не принимаются: в sing-box 1.14 WireGuard — это endpoint, а не outbound.
+- Через Xray идут только VLESS и Trojan с xhttp. Другие транспорты Xray (kcp и т.п.) не поддерживаются.
+- Kill switch в TUN работает через брандмауэр Windows. Если брандмауэр выключен или его заменил сторонний антивирус, блокировка не сработает, Orbita об этом предупредит.
 - Только Windows.
 
 ## Лицензия и сторонние компоненты
@@ -83,5 +93,6 @@ npm run dist       # установщик и портативная версия
 Код Orbita — MIT © dimon0804.
 
 - Ядро [sing-box](https://github.com/SagerNet/sing-box) — GPL-3.0. В сборку входит неизменённый бинарник официального релиза v1.14.4, его лицензия лежит рядом (`resources/core/LICENSE`), исходный код — в [репозитории sing-box](https://github.com/SagerNet/sing-box/tree/v1.14.4).
+- Ядро [Xray-core](https://github.com/XTLS/Xray-core) — MPL-2.0. В сборку входит неизменённый бинарник официального релиза v26.10.31, лицензия — `resources/core/LICENSE-xray`.
 - Наборы правил [sing-geosite](https://github.com/SagerNet/sing-geosite) и [sing-geoip](https://github.com/SagerNet/sing-geoip).
 - Шрифт флагов — [Twemoji](https://github.com/jdecked/twemoji) (графика CC-BY 4.0) в сборке [country-flag-emoji-polyfill](https://github.com/talkjs/country-flag-emoji-polyfill).
