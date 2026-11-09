@@ -53,6 +53,19 @@ export class Core extends EventEmitter {
   private mixedPort = 0
   private trafficAbort: AbortController | null = null
   private stopping = false
+  /** Порт, на который kill switch оставил системный прокси после падения ядра. */
+  private heldProxyPort: number | null = null
+
+  get holdingProxy(): boolean {
+    return this.heldProxyPort !== null
+  }
+
+  async releaseHeldProxy(): Promise<void> {
+    if (this.heldProxyPort === null) return
+    const port = this.heldProxyPort
+    this.heldProxyPort = null
+    await clearSystemProxy(port).catch(() => {})
+  }
   private xray = new XrayRunner(dataDir(), (level, text) => this.log(level, text))
 
   private log(level: LogLine['level'], text: string): void {
@@ -79,6 +92,9 @@ export class Core extends EventEmitter {
     isAdmin: boolean
   }): Promise<void> {
     if (this.proc) await this.stop()
+    // В режиме «системный» прокси тут же поставим заново — не снимаем, чтобы не было окна без защиты.
+    if (o.mode === 'system') this.heldProxyPort = null
+    else await this.releaseHeldProxy()
     if (o.mode === 'tun' && !o.isAdmin) {
       this.setStatus({ state: 'error', error: 'Для режима TUN нужны права администратора' })
       throw new Error(this.status.error)
@@ -159,8 +175,12 @@ export class Core extends EventEmitter {
       if (this.stopping) {
         this.setStatus({ state: 'stopped' })
       } else {
-        // Упало само — снимаем системный прокси, иначе интернет пропадёт.
-        if (o.mode === 'system') void clearSystemProxy(this.mixedPort).catch(() => {})
+        // Упало само. Без kill switch снимаем системный прокси, иначе интернет пропадёт;
+        // с kill switch оставляем — браузеры упрутся в мёртвый порт и не пойдут напрямую.
+        if (o.mode === 'system') {
+          if (o.settings.killSwitch) this.heldProxyPort = this.mixedPort
+          else void clearSystemProxy(this.mixedPort).catch(() => {})
+        }
         this.log('error', `Ядро завершилось с кодом ${code}`)
         this.setStatus({ state: 'error', error: `Ядро неожиданно остановилось (код ${code})` })
       }
@@ -187,6 +207,7 @@ export class Core extends EventEmitter {
 
   async stop(): Promise<void> {
     const proc = this.proc
+    await this.releaseHeldProxy()
     if (!proc) {
       await this.xray.stop()
       if (this.status.state !== 'stopped') this.setStatus({ state: 'stopped' })
@@ -381,6 +402,45 @@ export async function measureLatency(
     await Promise.all(Array.from({ length: Math.min(12, list.length) }, worker))
   } finally {
     proc.kill()
+    await xray.stop()
+    try {
+      unlinkSync(cfgPath)
+    } catch {
+      /* уже нет */
+    }
+  }
+}
+
+/**
+ * Временный локальный прокси, который ведёт ровно в один профиль (для теста скорости).
+ * fn получает порт mixed-входа; ядро гасится после fn.
+ */
+export async function withProfileProxy<T>(profile: Profile, fn: (port: number) => Promise<T>): Promise<T> {
+  const api = await freePort()
+  const listen = await freePort()
+  const secret = randomBytes(8).toString('hex')
+  const cfgPath = join(dataDir(), `speed-${listen}.json`)
+  const xray = new XrayRunner(dataDir())
+  const xp = await xray.start([profile])
+  let proc: ChildProcess | null = null
+  try {
+    writeFileSync(cfgPath, JSON.stringify(buildTestConfig([profile], api, secret, xp, { listenPort: listen, profileId: profile.id })))
+    const err = await checkConfig(cfgPath)
+    if (err) throw new Error(err.split(/\r?\n/).pop())
+    proc = spawn(coreBin(), ['run', '-c', cfgPath, '--disable-color'], { windowsHide: true, cwd: dataDir() })
+    const end = Date.now() + 8000
+    for (;;) {
+      try {
+        if ((await fetch(`http://127.0.0.1:${api}/version`, { headers: { Authorization: `Bearer ${secret}` } })).ok) break
+      } catch {
+        /* ждём */
+      }
+      if (Date.now() > end) throw new Error('тестовое ядро не поднялось')
+      await new Promise((r) => setTimeout(r, 150))
+    }
+    return await fn(listen)
+  } finally {
+    proc?.kill()
     await xray.stop()
     try {
       unlinkSync(cfgPath)

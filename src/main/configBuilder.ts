@@ -147,7 +147,7 @@ export function buildConfig(i: BuildInput): Json {
   // Правила маршрутизации
   const rules: Json[] = [{ action: 'sniff' }]
   // Xray сам ходит к своим серверам; в TUN его трафик (и DNS) не должен вернуться в туннель.
-  if (mode === 'tun' && Object.keys(i.xrayPorts ?? {}).length) rules.push({ process_name: ['xray.exe'], outbound: 'direct' })
+  if (mode === 'tun') rules.push({ process_name: ['xray.exe'], outbound: 'direct' })
   if (mode === 'tun') rules.push({ protocol: 'dns', action: 'hijack-dns' })
   rules.push({ ip_is_private: true, outbound: 'direct' })
 
@@ -235,7 +235,8 @@ export function buildTestConfig(
     ...(speed ? { inbounds: [{ type: 'mixed', tag: 'speed-in', listen: '127.0.0.1', listen_port: speed.listenPort }] } : {}),
     outbounds: [...outbounds, { type: 'direct', tag: 'direct' }],
     ...(endpoints.length ? { endpoints } : {}),
-    route: { final: speed ? speed.profileId : 'direct', default_domain_resolver: 'local' },
+    // мимо TUN основного подключения, иначе замер пойдёт через текущий сервер
+    route: { final: speed ? speed.profileId : 'direct', default_domain_resolver: 'local', auto_detect_interface: true },
     experimental: { clash_api: { external_controller: `127.0.0.1:${port}`, secret } }
   }
 }

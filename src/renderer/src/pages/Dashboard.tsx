@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Area, AreaChart, ResponsiveContainer, Tooltip, YAxis } from 'recharts'
 import {
-  ArrowDown, ArrowUp, ChevronRight, Clock, Globe2, Laptop, Layers, Power, RefreshCw, ShieldCheck, Waypoints, Zap
+  ArrowDown, ArrowUp, ChevronRight, Clock, Globe2, Laptop, Layers, Power, RefreshCw, ShieldAlert, ShieldCheck, Waypoints, Zap
 } from 'lucide-react'
 import type { ConnectMode, RouteMode } from '@shared/types'
 import {
@@ -106,6 +106,11 @@ export default function Dashboard({ st, go }: { st: AppState; go: (p: PageId) =>
           </div>
           {running && status.startedAt ? (
             <div className="hero-sub"><Clock size={14} /> {duration(now - status.startedAt)}</div>
+          ) : st.killSwitchActive && !busy ? (
+            <div className="hero-sub hero-err">
+              <ShieldAlert size={14} /> Kill switch закрыл интернет, пока нет подключения.{' '}
+              <button className="link-btn" onClick={() => void act(call('disconnect'), 'Интернет снова открыт')}>Открыть</button>
+            </div>
           ) : status.state === 'error' ? (
             <div className="hero-sub hero-err">{status.error}</div>
           ) : (

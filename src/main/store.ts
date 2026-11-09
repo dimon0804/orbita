@@ -19,6 +19,8 @@ export interface Data {
   dirty?: boolean
   /** PID запущенного ядра — чтобы добить его, если приложение упало. */
   corePid?: number
+  /** Kill switch закрыл интернет брандмауэром: прежние настройки профилей, чтобы вернуть. */
+  killSwitch?: Record<string, string>
   /** Человек отказал в UAC — сами больше не спрашиваем. */
   elevateDeclined?: boolean
 }
@@ -49,6 +51,7 @@ export const DEFAULT_SETTINGS: Settings = {
   hotkey: 'CommandOrControl+Alt+O',
   notifications: true,
   autoReconnect: true,
+  killSwitch: false,
   theme: 'dark',
   accent: '#7c5cff'
 }

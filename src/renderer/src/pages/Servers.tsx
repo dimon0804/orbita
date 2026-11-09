@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
-  ArrowDownUp, Check, ClipboardPaste, Download, FolderPlus, Gauge, Link2, Pencil, Plus, QrCode, RefreshCw, Rss, Search, Server, Share2, Trash2, Zap
+  FileUp, ArrowDownUp, Check, ClipboardPaste, Download, FolderPlus, Gauge, Link2, Pencil, Plus, QrCode, RefreshCw, Rss, Search, Server, Share2, Trash2, Zap
 } from 'lucide-react'
 import type { Group, Profile } from '@shared/types'
-import { act, AppState, bytes, call, latencyClass, nameFlag, protoLabel, toast } from '../api'
+import { act, AppState, bytes, call, latencyClass, nameFlag, on, protoLabel, toast } from '../api'
 import QRCode from 'qrcode'
 import { Empty, Modal } from '../components/ui'
 
@@ -234,17 +234,41 @@ function ProfileRow({ p, selected, running, onSelect, onConnect, onEdit, onQr }:
   const name = flag ? p.name.replace(flag, '').trim() : p.name
   const addr = `${String(p.outbound.server ?? '')}${p.outbound.server_port ? ':' + p.outbound.server_port : ''}`
   const traffic = p.traffic ? p.traffic.up + p.traffic.down : 0
+  const [live, setLive] = useState<number | null>(null)
+  useEffect(
+    () =>
+      on('speed', (raw) => {
+        const e = raw as { id: string; mbps?: number; done?: boolean }
+        if (e.id !== p.id) return
+        setLive(e.done ? null : (e.mbps ?? 0))
+      }),
+    [p.id]
+  )
+  const testing = live !== null
+  const runSpeed = async (): Promise<void> => {
+    setLive(0)
+    await act(call<number>('speedtest', p.id), (m) => `Скорость: ${m} Мбит/с`)
+    setLive(null)
+  }
   return (
     <div className={`prow ${selected ? 'selected' : ''} ${running ? 'live' : ''}`} onClick={onSelect} onDoubleClick={onConnect}>
       <span className="prow-flag">{flag ?? <Server size={16} />}</span>
       <div className="prow-main">
         <div className="prow-name">{name}{running && <span className="live-dot" />}</div>
-        <div className="prow-addr">{addr}</div>
+        <div className="prow-addr">
+          {addr}
+          {testing ? (
+            <span className="prow-speed live"> · {live ? `${live} Мбит/с` : 'меряю скорость…'}</span>
+          ) : p.speed !== undefined ? (
+            <span className="prow-speed"> · {p.speed} Мбит/с</span>
+          ) : null}
+        </div>
       </div>
       <span className="proto">{protoLabel(p.outbound)}</span>
       <span className="prow-traffic">{traffic ? bytes(traffic) : ''}</span>
       <span className={`lat ${latencyClass(p.latency)}`}>{p.latency === undefined ? '—' : p.latency === null ? 'тайм-аут' : `${p.latency} мс`}</span>
       <div className="prow-actions" onClick={(e) => e.stopPropagation()}>
+        <button className="icon-btn" title="Тест скорости (10 секунд)" disabled={testing} onClick={() => void runSpeed()}><Gauge size={14} /></button>
         <button className="icon-btn" title="QR-код для телефона" onClick={onQr}><QrCode size={14} /></button>
         <button className="icon-btn" title="Скопировать ссылку" onClick={() => void act(call('profile:link', p.id), 'Ссылка скопирована')}><Share2 size={14} /></button>
         <button className="icon-btn" title="Изменить" onClick={onEdit}><Pencil size={14} /></button>
@@ -257,11 +281,19 @@ function ProfileRow({ p, selected, running, onSelect, onConnect, onEdit, onQr }:
 
 function AddDialog({ groupId, onClose, onGroup }: { groupId?: string; onClose: () => void; onGroup: (id: string) => void }): React.JSX.Element {
   const [text, setText] = useState('')
+  const [fileName, setFileName] = useState('')
   const [busy, setBusy] = useState(false)
+  const fileRef = useRef<HTMLInputElement>(null)
+  const pickFile = async (f: File | undefined): Promise<void> => {
+    if (!f) return
+    if (f.size > 5_000_000) return toast('warn', 'Файл слишком большой')
+    setText(await f.text())
+    setFileName(f.name.replace(/\.[^.]+$/, ''))
+  }
   const isSub = /^https?:\/\/\S+$/i.test(text.trim()) && !/^https?:\/\/[^@/]+@/.test(text.trim())
   const submit = async (): Promise<void> => {
     setBusy(true)
-    const r = await act(call<{ added: number; group?: string }>('add:text', text, groupId))
+    const r = await act(call<{ added: number; group?: string }>('add:text', text, groupId, fileName || undefined))
     setBusy(false)
     if (!r) return
     if (!r.added) return toast('warn', 'Не нашёл ни одного сервера. Проверь ссылку.')
@@ -272,8 +304,9 @@ function AddDialog({ groupId, onClose, onGroup }: { groupId?: string; onClose: (
   return (
     <Modal title="Добавить сервер или подписку" onClose={onClose}>
       <p className="muted">
-        Вставь одну или несколько ссылок (каждая с новой строки) или адрес подписки. Понимаю VLESS, Reality, VMess, Trojan, Shadowsocks,
-        Hysteria 2, TUIC, AnyTLS, SOCKS4/5, HTTP и HTTPS, а также подписки base64, Clash и sing-box.
+        Вставь одну или несколько ссылок (каждая с новой строки) или адрес подписки. Понимаю VLESS (в том числе xhttp), Reality, VMess,
+        Trojan, Shadowsocks, Hysteria 2, TUIC, AnyTLS, WireGuard, SOCKS4/5, HTTP и HTTPS, а также подписки base64, Clash, sing-box и Xray.
+        Файл WireGuard .conf можно выбрать кнопкой «Из файла».
       </p>
       <textarea
         className="input area"
@@ -281,9 +314,23 @@ function AddDialog({ groupId, onClose, onGroup }: { groupId?: string; onClose: (
         rows={7}
         placeholder={'vless://…\nhy2://…\nsocks5://user:pass@1.2.3.4:1080#Мой сокс\nhttps://sub.example.com/abc'}
         value={text}
-        onChange={(e) => setText(e.target.value)}
+        onChange={(e) => {
+          setText(e.target.value)
+          setFileName('')
+        }}
+      />
+      <input
+        ref={fileRef}
+        type="file"
+        hidden
+        accept=".conf,.json,.txt,.yaml,.yml"
+        onChange={(e) => {
+          void pickFile(e.target.files?.[0])
+          e.target.value = ''
+        }}
       />
       <div className="modal-foot">
+        <button className="btn ghost" onClick={() => fileRef.current?.click()}><FileUp size={14} /> Из файла</button>
         <span className="muted">{text.trim() ? (isSub ? <><Rss size={13} /> это подписка</> : <><Link2 size={13} /> ссылки на серверы</>) : ''}</span>
         <button className="btn" onClick={onClose}>Отмена</button>
         <button className="btn primary" disabled={!text.trim() || busy} onClick={() => void submit()}>{busy ? 'Загружаю…' : 'Добавить'}</button>
@@ -309,7 +356,7 @@ function NekoDialog({ onClose }: { onClose: () => void }): React.JSX.Element {
         <span>Папка config</span>
         <input className="input input-wide" value={dir} onChange={(e) => setDir(e.target.value)} placeholder="C:\…\nekoray\config" />
       </label>
-      <p className="muted small">Профили с транспортом xhttp ядро sing-box пока не поддерживает, их пропущу.</p>
+      <p className="muted small">Серверы с транспортом xhttp перенесу тоже, их поведёт второе ядро Xray.</p>
       <div className="modal-foot">
         <span />
         <button className="btn" onClick={onClose}>Отмена</button>

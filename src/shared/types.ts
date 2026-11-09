@@ -17,6 +17,9 @@ export interface Profile extends ParsedProfile {
   /** Последний замер задержки, мс. null — не отвечает, undefined — не мерили. */
   latency?: number | null
   latencyAt?: number
+  /** Последний тест скорости скачивания, Мбит/с. */
+  speed?: number
+  speedAt?: number
   traffic?: { up: number; down: number }
 }
 
@@ -86,6 +89,8 @@ export interface Settings {
   notifications: boolean
   /** Если ядро упало — поднять его снова. */
   autoReconnect: boolean
+  /** Если ядро упало — не выпускать трафик мимо VPN, пока подключение не вернётся. */
+  killSwitch: boolean
   theme: 'dark' | 'light' | 'system'
   accent: string
   selectedProfileId?: string

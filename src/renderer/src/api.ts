@@ -26,6 +26,7 @@ export interface AppState {
   stats: DayStat[]
   status: CoreStatus
   isAdmin: boolean
+  killSwitchActive?: boolean
   version: string
   portable: boolean
   update: null | {
@@ -204,6 +205,7 @@ export function protoLabel(o: { type: string; tls?: unknown; version?: unknown }
   if (o.type === 'http' && tls?.enabled) return 'HTTPS'
   if (o.type === 'socks') return `SOCKS${o.version ?? '5'}`
   if (o.type === 'vless' && tls?.reality?.enabled) return 'Reality'
+  if (o.type === 'xray') return 'XHTTP'
   return PROTO_LABEL[o.type] ?? o.type.toUpperCase()
 }
 

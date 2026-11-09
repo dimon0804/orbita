@@ -43,6 +43,12 @@ export default function SettingsPage({ st }: { st: AppState }): React.JSX.Elemen
           <TextInput value={s.hotkey} onChange={(v) => set({ hotkey: v.trim() })} placeholder="CommandOrControl+Alt+O" />
         </Row>
         <Row title="Переподключаться, если ядро упало" hint="До трёх попыток в минуту, дальше Orbita сдаётся и показывает уведомление"><Toggle checked={s.autoReconnect} onChange={(v) => set({ autoReconnect: v })} /></Row>
+        <Row
+          title="Kill switch"
+          hint="Если ядро упало, трафик не уйдёт мимо VPN. В режиме «Системный» прокси остаётся на месте, в TUN интернет закрывается брандмауэром Windows до переподключения или до кнопки «Отключить»"
+        >
+          <Toggle checked={s.killSwitch} onChange={(v) => set({ killSwitch: v })} />
+        </Row>
         <Row title="Уведомления Windows" hint="Подключение, обрыв, новая версия — когда окно свёрнуто"><Toggle checked={s.notifications} onChange={(v) => set({ notifications: v })} /></Row>
         <Row title="Проверять обновления" hint="При запуске и раз в 6 часов смотрит релизы на GitHub"><Toggle checked={s.checkUpdates} onChange={(v) => set({ checkUpdates: v })} /></Row>
       </section>

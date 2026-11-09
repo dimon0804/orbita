@@ -6,7 +6,10 @@ import { join } from 'path'
 import type { ConnectMode, Group, Outbound, Profile, RouteMode, Settings } from '@shared/types'
 import { parseLink, parseSubscription, parseSubscriptionInfo, toLink } from '@shared/links'
 import { addTraffic, db, newId, save } from './store'
-import { Core, coreVersion, measureLatency } from './core'
+import { Core, coreVersion, measureLatency, withProfileProxy } from './core'
+import { xrayVersion } from './xray'
+import { engageKillSwitch, releaseKillSwitch } from './killswitch'
+import { coreBin, xrayBin } from './paths'
 import { sys, enableElevatedTask, ensureElevated, isAdmin, relaunchAsAdmin, removeElevatedTask, setAutostart } from './admin'
 import { iconPath } from './paths'
 import { clearSystemProxy } from './sysproxy'
@@ -144,7 +147,8 @@ function publicState(): unknown {
     isAdmin: isAdmin(),
     version: currentVersion(),
     portable: isPortable(),
-    update
+    update,
+    killSwitchActive: !!d.killSwitch || core.holdingProxy
   }
 }
 
@@ -233,6 +237,8 @@ async function doConnect(): Promise<void> {
       mode: d.settings.connectMode,
       isAdmin: isAdmin()
     })
+    lastMode = d.settings.connectMode
+    await releaseFirewall()
     d.dirty = d.settings.connectMode === 'system'
     wantConnected = true
     save()
@@ -250,6 +256,7 @@ function disconnect(): Promise<void> {
 async function doDisconnect(): Promise<void> {
   wantConnected = false
   await core.stop()
+  await releaseFirewall()
   db().dirty = false
   save()
   await updateNetProxy()
@@ -298,13 +305,58 @@ function notify(title: string, body: string, force = false): void {
 // ───────── автопереподключение ─────────
 
 let wantConnected = false
+let lastMode: ConnectMode | null = null
 let crashes: number[] = []
+
+// ───────── kill switch ─────────
+
+async function engageFirewall(): Promise<void> {
+  const d = db()
+  if (d.killSwitch) return
+  if (!isAdmin()) {
+    send('toast', { kind: 'warn', text: 'Kill switch в TUN требует прав администратора' })
+    return
+  }
+  try {
+    const r = await engageKillSwitch([coreBin(), xrayBin()])
+    d.killSwitch = r.backup
+    save(true)
+    core.emit('log', { t: Date.now(), level: 'warn', text: 'Kill switch: исходящий трафик закрыт брандмауэром до переподключения' })
+    if (r.disabled.length) notify('Kill switch не сработает полностью', `Брандмауэр Windows выключен для профилей: ${r.disabled.join(', ')}`, true)
+  } catch (e) {
+    notify('Kill switch не включился', errText(e), true)
+  }
+}
+
+async function releaseFirewall(): Promise<void> {
+  const d = db()
+  if (!d.killSwitch) return
+  try {
+    await releaseKillSwitch(d.killSwitch)
+    d.killSwitch = undefined
+    save(true)
+  } catch (e) {
+    notify('Не удалось снять блокировку kill switch', `${errText(e)}. Запусти Orbita от администратора и нажми «Отключить».`, true)
+  }
+}
+
 function onCoreCrash(): void {
-  notify('Ядро остановилось', core.status.error ?? 'Неизвестная ошибка', true)
-  if (!wantConnected || !db().settings.autoReconnect) return
+  const d = db()
+  const guarded = wantConnected && d.settings.killSwitch
+  if (guarded && lastMode === 'tun') void engageFirewall().finally(broadcast)
+  notify(
+    'Ядро остановилось',
+    (core.status.error ?? 'Неизвестная ошибка') + (guarded ? '. Kill switch держит трафик, пока подключение не вернётся.' : ''),
+    true
+  )
+  if (!wantConnected || !d.settings.autoReconnect) return
   crashes = crashes.filter((t) => Date.now() - t < 60_000)
   if (crashes.length >= 3) {
-    notify('Не получается переподключиться', 'Ядро падает снова и снова. Загляни в логи.', true)
+    notify(
+      'Не получается переподключиться',
+      guarded ? 'Интернет закрыт kill switch. Нажми «Отключить», чтобы его открыть, и загляни в логи.' : 'Ядро падает снова и снова. Загляни в логи.',
+      true
+    )
     wantConnected = false
     return
   }
@@ -403,6 +455,55 @@ async function updateNetProxy(): Promise<void> {
   await netSession().closeAllConnections()
 }
 
+// ───────── тест скорости ─────────
+
+let speedBusy = false
+// Cloudflare отдаёт не больше 50 МБ за запрос — на быстрых каналах качаем несколько подряд.
+const SPEED_URL = 'https://speed.cloudflare.com/__down?bytes=50000000'
+
+/** Качаем через локальный прокси до 10 секунд, считаем среднюю скорость без первой секунды (разгон TCP). */
+async function downloadSpeed(port: number, onLive: (mbps: number) => void): Promise<number> {
+  const ses = session.fromPartition('orbita-speed')
+  await ses.setProxy({ proxyRules: `socks5://127.0.0.1:${port}` })
+  await ses.closeAllConnections()
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), 11000)
+  const start = Date.now()
+  let total = 0
+  let warm: { t: number; bytes: number } | null = null
+  let lastSent = 0
+  const rate = (): number => {
+    const from = warm ?? { t: start, bytes: 0 }
+    const sec = (Date.now() - from.t) / 1000
+    return sec > 0 ? Math.round(((total - from.bytes) * 8) / sec / 1e4) / 100 : 0
+  }
+  try {
+    while (Date.now() - start < 10000) {
+      const r = await ses.fetch(SPEED_URL, { signal: ctrl.signal, cache: 'no-store' })
+      if (!r.ok || !r.body) throw new Error(`Сервер теста ответил ${r.status}`)
+      const reader = r.body.getReader()
+      for (;;) {
+        const { value, done } = await reader.read()
+        if (done) break
+        total += value.byteLength
+        const now = Date.now()
+        if (!warm && now - start > 1000) warm = { t: now, bytes: total }
+        if (now - lastSent > 250) {
+          lastSent = now
+          onLive(rate())
+        }
+        if (now - start > 10000) break
+      }
+    }
+    ctrl.abort()
+  } catch (e) {
+    if (!total) throw new Error('Сервер не отвечает: ' + errText(e))
+  } finally {
+    clearTimeout(timer)
+  }
+  return rate()
+}
+
 // ───────── подписки ─────────
 
 const decodeTitle = (t: string | null): string | undefined => {
@@ -486,7 +587,7 @@ function scheduleSubscriptions(): void {
 
 // ───────── добавление ─────────
 
-async function addFromText(text: string, groupId?: string): Promise<{ added: number; group?: string }> {
+async function addFromText(text: string, groupId?: string, fileName?: string): Promise<{ added: number; group?: string }> {
   const d = db()
   const t = text.trim()
   if (/^https?:\/\/\S+$/i.test(t) && !/^https?:\/\/[^@/]+@/.test(t)) {
@@ -510,6 +611,8 @@ async function addFromText(text: string, groupId?: string): Promise<{ added: num
     }
   }
   const parsed = parseSubscription(t)
+  // .conf WireGuard без имени внутри — называем по файлу
+  if (fileName && parsed.length === 1 && parsed[0].outbound.type === 'wireguard') parsed[0].name = fileName
   const gid = groupId && d.groups.some((g) => g.id === groupId && g.kind === 'manual') ? groupId : 'default'
   if (!d.groups.some((g) => g.id === gid)) d.groups.unshift({ id: 'default', name: 'Мои серверы', kind: 'manual', order: -1 })
   for (const p of parsed)
@@ -552,7 +655,7 @@ function ipc(): void {
   h('connect', () => connect())
   h('disconnect', () => disconnect())
   h('select', (id: string) => selectProfile(id))
-  h('add:text', (text: string, gid?: string) => addFromText(text, gid))
+  h('add:text', (text: string, gid?: string, fileName?: string) => addFromText(text, gid, fileName))
   h('add:clipboard', async (gid?: string) => addFromText(await clipboard.readText(), gid))
   h('add:outbound', (name: string, outbound: Outbound, gid?: string) => {
     const d = db()
@@ -621,6 +724,24 @@ function ipc(): void {
     save()
     broadcast()
   })
+  h('speedtest', async (id: string) => {
+    const d = db()
+    const p = d.profiles.find((x) => x.id === id)
+    if (!p) throw new Error('Сервер не найден')
+    if (speedBusy) throw new Error('Тест скорости уже идёт')
+    speedBusy = true
+    try {
+      const mbps = await withProfileProxy(p, (port) => downloadSpeed(port, (live) => send('speed', { id, mbps: live })))
+      p.speed = mbps
+      p.speedAt = Date.now()
+      save()
+      broadcast()
+      return mbps
+    } finally {
+      speedBusy = false
+      send('speed', { id, done: true })
+    }
+  })
   h('connections', () => (core.running ? core.connections() : { connections: [] }))
   h('connections:close', (id?: string) => core.closeConnection(id))
   h('ip', async () => {
@@ -675,6 +796,7 @@ function ipc(): void {
     return relaunchAsAdmin()
   })
   h('core:version', () => coreVersion())
+  h('xray:version', () => xrayVersion())
   h('open:data', () => shell.openPath(app.getPath('userData')))
   h('win:min', () => win?.minimize())
   h('win:max', () => (win?.isMaximized() ? win.unmaximize() : win?.maximize()))
@@ -698,6 +820,8 @@ app.whenReady().then(async () => {
     }
     d.corePid = undefined
   }
+  // Прошлый запуск закрыл интернет kill switch'ем и не успел открыть.
+  if (d.killSwitch) await releaseFirewall()
   if (d.dirty) {
     // Прошлый запуск упал с включённым системным прокси.
     await clearSystemProxy(d.settings.mixedPort).catch(() => {})
@@ -747,8 +871,17 @@ app.on('before-quit', (e) => {
   quitting = true
   if (core.status.state !== 'stopped' && core.status.state !== 'error') {
     e.preventDefault()
-    void serial(() => core.stop()).finally(() => {
+    void serial(async () => {
+      await core.stop()
+      await releaseFirewall()
+    }).finally(() => {
       db().dirty = false
+      save(true)
+      app.exit(0)
+    })
+  } else if (db().killSwitch || core.holdingProxy) {
+    e.preventDefault()
+    void Promise.all([releaseFirewall(), core.releaseHeldProxy()]).finally(() => {
       save(true)
       app.exit(0)
     })
