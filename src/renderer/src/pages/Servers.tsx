@@ -200,7 +200,6 @@ function AutoRow({ group, count, selected, running, onSelect, onConnect }: {
       <span className="proto">AUTO</span>
       <span />
       <span />
-      <span />
       {selected ? <Check size={16} className="prow-check" /> : <span />}
     </div>
   )
