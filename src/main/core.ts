@@ -186,13 +186,23 @@ export class Core extends EventEmitter {
       }
     })
 
-    // Ждём, пока поднимется clash api.
-    const ok = await this.waitReady(8000)
+    // Ждём, пока поднимется clash api. TUN сразу после загрузки Windows поднимается долго
+    // (драйвер wintun, сеть ещё не готова), 8 секунд на это не хватало.
+    const waitMs = o.mode === 'tun' ? 45_000 : 15_000
+    const ok = await this.waitReady(waitMs)
     if (!ok) {
-      const tail = this.logs.slice(-3).map((l) => l.text).join('\n')
+      const alive = this.proc === proc
+      // Строки самого ядра начинаются с уровня (FATAL[0001] ...), свои «Ядро завершилось…» пропускаем.
+      const lastErr = [...this.logs]
+        .reverse()
+        .find((l) => (l.level === 'error' || l.level === 'fatal') && /^(ERROR|FATAL|PANIC)/i.test(l.text))?.text
       await this.stop()
-      this.setStatus({ state: 'error', error: tail || 'Ядро не запустилось' })
-      throw new Error(this.status.error)
+      const error = alive
+        ? `Ядро не ответило за ${waitMs / 1000} с${o.mode === 'tun' ? ' — TUN-адаптер не поднялся. Проверь, что другие VPN (NekoBox, Hiddify, Happ) выключены' : ''}`
+        : lastErr || 'Ядро не запустилось, подробности в логах'
+      this.log('error', error)
+      this.setStatus({ state: 'error', error })
+      throw new Error(error)
     }
     if (o.mode === 'system') {
       try {
