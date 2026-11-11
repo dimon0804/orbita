@@ -1,7 +1,7 @@
 {
   "name": "orbita",
   "productName": "Orbita",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Orbita — десктопный клиент для прокси и VPN на ядре sing-box",
   "author": "dimon0804 <dimongamedeveloper@yandex.ru>",
   "license": "MIT",
